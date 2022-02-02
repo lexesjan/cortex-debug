@@ -110,9 +110,12 @@ export class CortexDebugConfigurationProvider implements vscode.DebugConfigurati
             case 'qemu':
                 validationResponse = this.verifyQEMUConfiguration(folder, config);
                 break;
+            case 'gem5':
+                validationResponse = this.verifyGem5Configuration(folder, config);
+                break;
             default:
                 // tslint:disable-next-line:max-line-length
-                validationResponse = 'Invalid servertype parameters. The following values are supported: "jlink", "openocd", "stlink", "stutil", "pyocd", "bmp", "pe", "qemu", "external"';
+                validationResponse = 'Invalid servertype parameters. The following values are supported: "jlink", "openocd", "stlink", "stutil", "pyocd", "bmp", "pe", "qemu", "gem5", "external"';
                 break;
         }
 
@@ -250,6 +253,14 @@ export class CortexDebugConfigurationProvider implements vscode.DebugConfigurati
 
         if (config.rtos) {
             return 'RTOS support is not available when using QEMU';
+        }
+
+        return null;
+    }
+
+    private verifyGem5Configuration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration): string {
+        if (!config.ROM) {
+            return 'ROM is required for gem5 configurations.'
         }
 
         return null;

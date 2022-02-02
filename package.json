@@ -562,6 +562,7 @@
                                     "bmp",
                                     "pe",
                                     "qemu",
+                                    "gem5",
                                     "external"
                                 ]
                             },
@@ -1517,6 +1518,7 @@
                                     "bmp",
                                     "pe",
                                     "qemu",
+                                    "gem5",
                                     "external"
                                 ]
                             },
@@ -2477,6 +2479,10 @@
                             "powerOverBMP": {
                                 "type": "string",
                                 "description": "Power up the board over Black Magic Probe. \"powerOverBMP\" : \"enable\" or \"powerOverBMP\" : \"disable\". If not set it will use the last power state."
+                            },
+                            "ROM": {
+                                "type": "string",
+                                "description": "ROM used to run "
                             }
                         },
                         "required": [

@@ -284,6 +284,9 @@ export interface ConfigurationArguments extends DebugProtocol.LaunchRequestArgum
 
     // External 
     gdbTarget: string;
+
+    // gem5 Specific
+    ROM: string;
 }
 
 export interface DisassemblyInstruction {

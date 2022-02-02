@@ -36,6 +36,7 @@ import { ExternalServerController } from './external';
 import { SymbolTable } from './backend/symbols';
 import { SymbolInformation, SymbolScope } from './symbols';
 import { TcpPortScanner } from './tcpportscanner';
+import { Gem5ServerController } from './gem5';
 
 const SERVER_TYPE_MAP = {
     jlink: JLinkServerController,
@@ -46,7 +47,8 @@ const SERVER_TYPE_MAP = {
     pe: PEServerController,
     bmp: BMPServerController,
     qemu: QEMUServerController,
-    external: ExternalServerController
+    external: ExternalServerController,
+    gem5: Gem5ServerController,
 };
 
 // Type of session start. Also used in display of call-stack window
@@ -385,7 +387,7 @@ export class GDBDebugSession extends DebugSession {
             const gdbPort = this.ports[createPortName(this.args.targetProcessor)];
             let initMatch = null;
             if (!usingParentServer) {
-                this.serverController.initMatch();
+                initMatch = this.serverController.initMatch();
                 if (this.args.overrideGDBServerStartedRegex) {
                     initMatch = new RegExp(this.args.overrideGDBServerStartedRegex, 'i');
                 }
