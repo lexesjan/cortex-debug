@@ -1,23 +1,20 @@
-import * as childProcess from 'child_process';
 import * as os from 'os';
 import * as path from 'path';
-import * as tmp from 'tmp';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { SpawnLineReader } from '../common';
 import { IntervalTree, Interval } from 'node-interval-tree';
-const commandExistsSync = require('command-exists').sync;
+import JsonStreamStringify from 'json-stream-stringify';
+const StreamArray = require('stream-json/streamers/StreamArray');
+import * as zlib from 'zlib';
 
-import { SymbolType, SymbolScope, SymbolInformation } from '../symbols';
-import { MINode } from './mi_parse';
+import { SymbolType, SymbolScope, SymbolInformation as SymbolInformation } from '../symbols';
 import { GDBDebugSession } from '../gdb';
+import { hexFormat } from '../frontend/utils';
 
-const SYMBOL_REGEX = /\n([0-9a-f]{8})\s([lg\ !])([w\ ])([C\ ])([W\ ])([I\ ])([dD\ ])([FfO\ ])\s(.*?)\s+([0-9a-f]+)\s([^\r\n]+)/mg;
-// DW_AT_name && DW_AT_comp_dir may have optional stuff that looks like '(indirect string, offset: 0xf94): '
-const COMP_UNIT_REGEX = /\n <0>.*\(DW_TAG_compile_unit\)[\s\S]*?DW_AT_name[\s]*: (\(.*\):\s)?(.*)[\r\n]+([\s\S]*?)\n </mg;
-// DW_AT_comp_dir may not exist
-const COMP_DIR_REGEX = /DW_AT_comp_dir[\s]*: (\(.*\):\s)?(.*)[\r\n]+/m;
+const OBJDUMP_SYMBOL_RE = RegExp(/^([0-9a-f]{8})\s([lg\ !])([w\ ])([C\ ])([W\ ])([I\ ])([dD\ ])([FfO\ ])\s(.*?)\t([0-9a-f]+)\s(.*)$/);
+const NM_SYMBOL_RE = RegExp(/^([0-9a-f]+).*\t(.+):[0-9]+/);     // For now, we only need two things
 const debugConsoleLogging = false;
-
 const TYPE_MAP: { [id: string]: SymbolType } = {
     'F': SymbolType.Function,
     'f': SymbolType.File,
@@ -34,21 +31,29 @@ const SCOPE_MAP: { [id: string]: SymbolScope } = {
 
 export class SymbolNode implements Interval {
     constructor(
-        public readonly func: SymbolInformation,
-        public readonly low: number,            // Inclusive near as I can tell
-        public readonly high: number            // Inclusive near as I can tell
+        public readonly symbol: SymbolInformation,  // Only functions and objects
+        public readonly low: number,                // Inclusive near as I can tell
+        public readonly high: number                // Inclusive near as I can tell
     ) {}
 }
-export class MemoryRegion {
+
+interface IMemoryRegion {
+    name: string;
+    size: number;
+    vmaStart: number;   // Virtual memory address
+    lmaStart: number;   // Load memory address
+    attrs: string[];
+}
+export class MemoryRegion implements IMemoryRegion {
     public vmaEnd: number;      // Inclusive
     public lmaEnd: number;      // Exclusive
-    constructor(
-        public name: string,
-        public size: number,
-        public vmaStart: number,   // Virtual memory address
-        public lmaStart: number,   // Load memory address
-        public attrs: string[]
-    ) {
+    public name: string;
+    public size: number;
+    public vmaStart: number;
+    public lmaStart: number;
+    public attrs: string[];
+    constructor(obj: IMemoryRegion) {
+        Object.assign(this, obj);
         this.vmaEnd = this.vmaStart + this.size + 1;
         this.lmaEnd = this.lmaStart + this.size + 1;
     }
@@ -66,8 +71,18 @@ export class MemoryRegion {
     }
 }
 
+interface ISymbolTableSerData {
+    version: number;
+    memoryRegions: MemoryRegion[];
+    fileTable: string[];
+    symbolKeys: string[];
+    allSymbols: any[][];
+}
+
 export class SymbolTable {
     private allSymbols: SymbolInformation[] = [];
+    private fileTable: string[] = [];
+    public memoryRegions: MemoryRegion[] = [];
 
     // The following are caches that are either created on demand or on symbol load. Helps performance
     // on large executables since most of our searches are linear. Or, to avoid a search entirely if possible
@@ -82,8 +97,7 @@ export class SymbolTable {
     private staticVars: SymbolInformation[] = [];
     private staticFuncsMap: {[key: string]: SymbolInformation[]} = {};  // Key is function name
     private fileMap: {[key: string]: string[]} = {};                    // basename of a file to a potential list of aliases we found
-    public memoryRegions: MemoryRegion[] = [];
-    public functionsAsTree: IntervalTree<SymbolNode> = new IntervalTree<SymbolNode>();
+    public symbolsAsTree: IntervalTree<SymbolNode> = new IntervalTree<SymbolNode>();
     public symmbolsByAddress: Map<number, SymbolInformation> = new Map<number, SymbolInformation>();
 
     constructor(
@@ -98,95 +112,113 @@ export class SymbolTable {
         }
     }
 
-    private async loadSymbolFilesFromGdb(): Promise<boolean> {
-        try {
-            this.gdbSession.miDebugger.startCaptureConsole();
-            await this.gdbSession.miDebugger.sendCommand('interpreter-exec console "info sources"');
-            const str = this.gdbSession.miDebugger.endCaptureConsole();
-            const lines = str.split(/[\r\n]+/g);
-            for (let line of lines) {
-                line = line.trim();
-                if ((line === '') || line.endsWith(':')) {
-                    continue;
-                }
-                const files = line.split(/\,\s/g);
-                for (const f of files) {
-                    this.addPathVariations(f);
-                }
-            }
-        }
-        catch {
-            const str = this.gdbSession.miDebugger.endCaptureConsole();
-            console.error('gdb info sources failed');
-            return false;
-        }
+    private createSymtableSerializedFName(exeName: string) {
+        return this.createFileMapCacheFileName(exeName, '-syms') + '.gz';
     }
 
-    private loadSymbolFilesFromGdbUnused(): Promise<boolean> {
-        return new Promise(async (resolve, reject) => {
-            if (!this.gdbSession.miDebugger || this.gdbSession.miDebugger.gdbMajorVersion < 9) {
-                return resolve(false);
+    private static CurrentVersion = 1;
+    private serializeSymbolTable(exeName: string) {
+        const fMap: {[key: string]: number} = {};
+        const keys = this.allSymbols.length > 0 ? Object.keys(this.allSymbols[0]) : [];
+        this.fileTable = [];
+        const syms = [];
+        for (const sym of this.allSymbols) {
+            const fName: string = sym.file as string;
+            let id: number = fMap[fName];
+            if (id === undefined) {
+                id = this.fileTable.length;
+                this.fileTable.push(fName);
+                fMap[fName] = id;
             }
+            const tmp = sym.file;
+            sym.file = id;
+            syms.push(Object.values(sym));
+            sym.file = tmp;
+        }
+        const serObj: ISymbolTableSerData = {
+            version: SymbolTable.CurrentVersion,
+            memoryRegions: this.memoryRegions,
+            fileTable: this.fileTable,
+            symbolKeys: keys,
+            allSymbols: syms
+        };
 
-            function getProp(ary: any, name: string): any {
-                if (ary) {
-                    for (const item of ary) {
-                        if (item[0] === name) {
-                            return item[1];
+        const fName = this.createSymtableSerializedFName(exeName);
+        const fStream = fs.createWriteStream(fName, { flags: 'w' });
+        fStream.on('error', () => {
+            console.error('Saving symbol table failed!!!');
+        });
+        fStream.on('close', () => {
+            console.log('Saved symbol table');
+        });
+        const jsonStream = new JsonStreamStringify([serObj]);
+        jsonStream.on('error', () => {
+            console.error('Saving symbol table JsonStreamStringify() failed!!!');
+        });
+        jsonStream
+            .pipe(zlib.createGzip())
+            .pipe(fStream)
+            .on('finish', () => {
+                console.log('Pipe ended');
+            });
+    }
+
+    private deSerializeSymbolTable(exeName: string): Promise<boolean> {
+        return new Promise<boolean>((resolve) => {
+            const fName = this.createSymtableSerializedFName(exeName);
+            if (!fs.existsSync(fName)) {
+                resolve(false);
+                return;
+            }
+            const fStream = fs.createReadStream(fName);
+            fStream.on('error', () => {
+                resolve(false);
+            });
+
+            console.time('abc');
+            const jsonStream = StreamArray.withParser();
+            jsonStream.on('data', ({key, value}) => {
+                console.timeLog('abc', 'Parsed data:');
+                fStream.close();
+                reconstruct(value);
+            });
+            fStream
+                .pipe(zlib.createGunzip())
+                .pipe(jsonStream.input);
+
+            const reconstruct = (data: any) => {
+                try {
+                    const serObj: ISymbolTableSerData = data as ISymbolTableSerData;
+                    if (!serObj || (serObj.version !== SymbolTable.CurrentVersion)) {
+                        resolve(false);
+                        return;
+                    }
+                    this.fileMap = {};
+                    for (const f of serObj.fileTable) {
+                        if (f !== null) {   // Yes, there one null in there
+                            this.addPathVariations(f);
                         }
                     }
-                }
-                return undefined;
-            }
 
-            try {
-                const miNode: MINode = await this.gdbSession.miDebugger.sendCommand('symbol-info-variables');
-                const results = getProp(miNode?.resultRecords?.results, 'symbols');
-                const dbgInfo = getProp(results, 'debug');
-                if (dbgInfo) {
-                    for (const file of dbgInfo) {
-                        const fullname = getProp(file, 'fullname');
-                        const filename = getProp(file, 'filename');
-                        if (fullname) {
-                            this.addPathVariations(fullname);
-                        }
-                        if (filename && (filename !== fullname)) {
-                            this.addPathVariations(filename);
-                        }
-                        // We just need to know what source files are intresting. Don't really care what
-                        // symbols are in there. Super expensive way to find out
-                        /*
-                        const symbols = getProp(file, 'symbols');
-                        if (symbols && (symbols.length > 0) && (filename || fullname)) {
-                            for (const sym of symbols) {
-                                const name = getProp(sym, 'name');
-                                const description = getProp(sym, 'description') as string;
-                                // maybe a more sophisticated way is needed to determine a static
-                                const isStatic = description && description.startsWith('static');
-                                if (isStatic) {
-                                    if (fullname) {
-                                        this.addPathVariations(fullname);
-                                        // this.addToFileMap(fullname, name);
-                                    }
-                                    if (filename && (filename !== fullname)) {
-                                        this.addPathVariations(filename);
-                                        // this.addToFileMap(filename, name);
-                                    }
-                                }
-                            }
-                        }
-                        */
+                    this.allSymbols = [];
+                    const keys = serObj.symbolKeys;
+                    const n = keys.length;
+                    for (const values of serObj.allSymbols) {
+                        const sym: any = {};
+                        values.forEach((v, i) => sym[keys[i]] = v);
+                        sym.file = serObj.fileTable[sym.file as number];
+                        this.addSymbol(sym/* as SymbolInformation*/);
                     }
+                    this.memoryRegions = [];
+                    for (const m of serObj.memoryRegions) {
+                        this.memoryRegions.push(new MemoryRegion(m));
+                    }
+                    console.timeEnd('abc');
+                    resolve(true);
+                } catch (e) {
+                    resolve(false);
                 }
-            }
-            catch {
-                console.error('symbol-info-variables failed');
-                return resolve(false);
-            }
-
-            // TODO: We should also get status function names but that is very slow. In the future, we will probably
-            // be doing full disassembly so ignore it until it is a real issue.
-            return resolve(true);
+            };
         });
     }
 
@@ -218,168 +250,212 @@ export class SymbolTable {
      * 
      * We avoid splitting the output(s) into lines and then parse line at a time.
      */
-
-    public loadSymbols(useObjdumpFname: string = ''): Promise<void> {
-        return new Promise(async (resolve, reject) => {
+    public loadSymbols(useObjdumpFname: string = '', useNmFname: string = ''): Promise<void> {
+        return new Promise(async (resolve) => {
             try {
-                let nxtLabel = 'Finished running objdump';
-                console.time(nxtLabel);
-                const doUnlink = !useObjdumpFname;
-                if (!useObjdumpFname) {
-                    useObjdumpFname = tmp.tmpNameSync();
-                    const options = ['--syms', '-C', '-h', '-w'];
-                    const outFd = fs.openSync(useObjdumpFname, 'w');
-                    const objdump = childProcess.spawnSync(this.objdumpPath, [...options, this.executable], {
-                        stdio: ['ignore', outFd, 'ignore']
-                    });
-                    fs.closeSync(outFd);
-                }
-                console.timeEnd(nxtLabel);
-                nxtLabel = 'Finished parsing objdump';
-                console.time(nxtLabel);
+                const total = 'Total running objdump & nm';
+                console.time(total);
 
-                const str = this.readNonSymbolStuff(useObjdumpFname, false);
-                const regex = RegExp(SYMBOL_REGEX);
-                let currentFile: string = null;
-                let match: RegExpExecArray;
-                while ((match = regex.exec(str)) !== null) {
-                    if (match[7] === 'd' && match[8] === 'f') {
-                        if (match[11]) {
-                            currentFile = SymbolTable.NormalizePath(match[11].trim());
-                        } else {
-                            // This can happen with C++. Inline and template methods/variables/functions/etc. are listed with
-                            // an empty file association. So, symbols after this line can come from multiple compilation
-                            // units with no clear owner. These can be locals, globals or other.
-                            currentFile = null;
-                        }
-                    }
-                    const type = TYPE_MAP[match[8]];
-                    const scope = SCOPE_MAP[match[2]];
-                    let name = match[11].trim();
-                    let hidden = false;
-
-                    if (name.startsWith('.hidden')) {
-                        name = name.substring(7).trim();
-                        hidden = true;
-                    }
-
-                    const sym: SymbolInformation = {
-                        address: parseInt(match[1], 16),
-                        type: type,
-                        scope: scope,
-                        section: match[9].trim(),
-                        length: parseInt(match[10], 16),
-                        name: name,
-                        isStatic: (scope === SymbolScope.Local) && currentFile ? true : false,
-                        file: currentFile,
-                        instructions: null,
-                        hidden: hidden
-                    };
-                    if (type === SymbolType.Function) {
-                        const treeSym = new SymbolNode(sym, sym.address, sym.address + Math.max(1, sym.length) - 1);
-                        this.functionsAsTree.insert(treeSym);
-                    }
-                    this.symmbolsByAddress.set(sym.address, sym);
-                    this.allSymbols.push(sym);
-                }
-                console.timeEnd(nxtLabel);
-
-                nxtLabel = 'deserializeFileMaps';
-                console.time(nxtLabel);
-                const restored = this.deSerializeFileMaps(this.executable);
-                console.timeEnd(nxtLabel);
+                // Currently not using caching. JSON save and especially restore is super slow. It
+                // faster to just re-rerun objdump and nm. The serialization methods work but ... barely
+                // When get really super large executables maybe they become is useful
+                const restored = false && await this.deSerializeSymbolTable(this.executable);
 
                 if (!restored) {
-                    nxtLabel = 'Finished running and parsing nm';
-                    console.time(nxtLabel);
-                    if (!this.loadSymFileInfoFromNm()) {
-                        nxtLabel = 'Finished parsing gdb';
-                        console.time(nxtLabel);
-                        await this.loadSymbolFilesFromGdb();
-                    }
-                    this.serializeFileMaps(this.executable);
-                    console.timeEnd(nxtLabel);
+                    await this.loadFromObjdumpAndNm(useObjdumpFname, useNmFname);
+                    // this.serializeSymbolTable(this.executable);
                 }
 
-                nxtLabel = 'Finished postprocessing symbols';
+                const nxtLabel = 'Postprocessing symbols';
                 console.time(nxtLabel);
                 this.categorizeSymbols();
                 this.sortGlobalVars();
                 resolve();
-                if (doUnlink) {
-                    fs.unlinkSync(useObjdumpFname);
-                }
                 console.timeEnd(nxtLabel);
+                console.timeEnd(total);
             }
             catch (e) {
                 // We treat this is non-fatal, but why did it fail?
-                this.gdbSession.handleMsg('log', `Error: objdump failed! statics/global/functions may not be properly classified: ${e.toString()}`);
+                this.gdbSession.handleMsg('log', `Error: objdump failed! statics/globals/functions may not be properly classified: ${e.toString()}`);
                 this.gdbSession.handleMsg('log', '    Please report this problem.');
                 resolve();
             }
         });
     }
 
-    public loadSymFileInfoFromNm(): boolean {
-        const nmProg = this.objdumpPath.replace(/objdump/i, 'nm');
-        const commandExistsSync = require('command-exists').sync;
-        if (!commandExistsSync(nmProg)) {
-            return false;
+    private addSymbol(sym: SymbolInformation) {
+        this.allSymbols.push(sym);
+        if ((sym.type === SymbolType.Function) || (sym.length > 0)) {
+            const treeSym = new SymbolNode(sym, sym.address, sym.address + Math.max(1, sym.length) - 1);
+            this.symbolsAsTree.insert(treeSym);
         }
+        this.symmbolsByAddress.set(sym.address, sym);
+    }
+
+    private objdumpReader: SpawnLineReader;
+    private currentObjDumpFile: string = null;
+
+    private readObjdumpHeaderLine(line: string, err: any): boolean {
+        if (!line) {
+            return line === '' ? true : false;
+        }
+        const entry = RegExp(/^\s*[0-9]+\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+(.*)$/);
+        // Header:
+        // Idx Name          Size      VMA       LMA       File off  Algn
+        // Sample entry:
+        //   0 .cy_m0p_image 000025d4  10000000  10000000  00010000  2**2 CONTENTS, ALLOC, LOAD, READONLY, DATA
+        //                                    1          2          3          4          5          6         7
+        // const entry = RegExp(/^\s*[0-9]+\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)[^\n]+\n\s*([^\r\n]*)\r?\n/gm);
+        const match = line.match(entry);
+        if (match) {
+            const attrs = match[7].trim().toLowerCase().split(/[,\s]+/g);
+            if (!attrs.find((s) => s === 'alloc')) {
+                // Technically we only need regions marked for code but lets get all non-debug, non-comment stuff
+                return true;
+            }
+            const region = new MemoryRegion({
+                name: match[1],
+                size: parseInt(match[2], 16),      // size
+                vmaStart: parseInt(match[3], 16),  // vma
+                lmaStart: parseInt(match[4], 16),  // lma
+                attrs: attrs
+            });
+            this.memoryRegions.push(region);
+        } else {
+            const memRegionsEnd = RegExp(/^SYMBOL TABLE:/);
+            if (memRegionsEnd.test(line)) {
+                this.objdumpReader.callback = this.readObjdumpSymbolLine.bind(this);
+            }
+        }
+        return true;
+    }
+
+    private readObjdumpSymbolLine(line: string, err: any): boolean {
+        if (!line) {
+            return line === '' ? true : false;
+        }
+        const match = line.match(OBJDUMP_SYMBOL_RE);
+        if (match) {
+            if (match[7] === 'd' && match[8] === 'f') {
+                if (match[11]) {
+                    this.currentObjDumpFile = SymbolTable.NormalizePath(match[11].trim());
+                } else {
+                    // This can happen with C++. Inline and template methods/variables/functions/etc. are listed with
+                    // an empty file association. So, symbols after this line can come from multiple compilation
+                    // units with no clear owner. These can be locals, globals or other.
+                    this.currentObjDumpFile = null;
+                }
+            }
+            const type = TYPE_MAP[match[8]];
+            const scope = SCOPE_MAP[match[2]];
+            let name = match[11].trim();
+            let hidden = false;
+
+            if (name.startsWith('.hidden')) {
+                name = name.substring(7).trim();
+                hidden = true;
+            }
+
+            const sym: SymbolInformation = {
+                address: parseInt(match[1], 16),
+                name: name,
+                file: this.currentObjDumpFile,
+                type: type,
+                scope: scope,
+                section: match[9].trim(),
+                length: parseInt(match[10], 16),
+                isStatic: (scope === SymbolScope.Local) && this.currentObjDumpFile ? true : false,
+                instructions: null,
+                hidden: hidden
+            };
+            this.addSymbol(sym);
+        }
+        return true;
+    }
+
+    private async loadFromObjdumpAndNm(useObjdumpFname: string = '', useNmFname: string = '') {
         try {
-            const options = [
+            const objDumpArgs = [
+                '--syms',   // Of course, we want symbols
+                '-C',       // Demangle
+                '-h',       // Want section headers
+                '-w',       // Don't wrap lines (wide format)
+                this.executable];
+            this.currentObjDumpFile = null;
+            this.objdumpReader = new SpawnLineReader();
+            this.objdumpReader.on('error', (e) => {
+                throw e;
+            });
+            this.objdumpReader.on('exit', (code, signal) => {
+                this.objdumpReader = undefined;
+                this.currentObjDumpFile = null;
+                // console.log('objdump exited', code, signal);
+            });
+            const objdumpPromise = (useObjdumpFname ?
+                this.objdumpReader.startWithFile(useObjdumpFname, null, this.readObjdumpHeaderLine.bind(this)) :
+                this.objdumpReader.startWithProgram(this.objdumpPath, objDumpArgs, this.readObjdumpHeaderLine.bind(this)));
+
+            const nmProg = this.objdumpPath.replace(/objdump/i, 'nm');
+            const nmArgs = [
                 '--defined-only',
                 '-S',   // Want size as well
                 '-l',   // File/line info
                 '-C',   // Demangle
-                '-p'    // do bother sorting
+                '-p',   // do bother sorting
                 // Do not use posix format. It is inaccurate
+                this.executable
             ];
-
-            const useNmDumpFname = tmp.tmpNameSync();
-            const outFd = fs.openSync(useNmDumpFname, 'w');
-            const objdump = childProcess.spawnSync(nmProg, [...options, this.executable], {
-                stdio: ['ignore', outFd, 'ignore']
+            this.addressToFile = new Map<number, string>();
+            const nmReader = new SpawnLineReader();
+            nmReader.on('error', (e) => {
+                this.gdbSession.handleMsg('log', `Error: ${nmProg} failed! statics/global/functions may not be properly classified: ${e.toString()}\n`);
+                this.gdbSession.handleMsg('log', '    Expecting `nm` next to `objdump`. If that is not the problem please report this.\n');
             });
-            fs.closeSync(outFd);
-            const str = fs.readFileSync(useNmDumpFname, {encoding: 'utf8'});
+            nmReader.on('exit', (code, signal) => {
+                // console.log('nm exited', code, signal);
+            });
+            const nmPromise = (useNmFname ?
+                nmReader.startWithFile(useNmFname, null, this.readNmSymbolLine.bind(this)) :
+                nmReader.startWithProgram(nmProg, nmArgs, this.readNmSymbolLine.bind(this)));
 
-            // If we do chose to use nm for more than file names, remember the following
-            // * Even if you ask for symbols with size, you will get some without size (esp for asm funcs)
-            // * Expect spaces in function names -- since we demangle, you can have whole func. signatures
-            // * Double check the following expressions
-            // const regexWithSize = RegExp(/^([0-9a-f]+) ([0-9a-f]+) (.) ([^\t]+)\t(.+):[1-9][0-9]*/mg);
-            // const regexNoSize = RegExp(/^([0-9a-f]+) (.) ([^\t]+)\t(.+):[1-9][0-9]*/mg);
-            const lines = str.split('\n');
-            const regex = RegExp(/^([0-9a-f]+).*\t(.+):[0-9]+/);     // For now, we only need two things
-            for (const line of lines) {
-                const match = line.match(regex);
-                if (match) {
-                    const address = parseInt(match[1], 16);
-                    const sym = this.symmbolsByAddress.get(address);
-                    if (sym) {
-                        const file = match[2];
-                        sym.file = file;
-                        this.addPathVariations(file);
-                    } else {
-                        console.error('Unknown symbol. Need to investigate', match[0]);
-                    }
+            // Yes, we launch both programs and wait for both to finish. Running them back to back
+            // takes almost twice as much time. Neither should technically fail.
+            await objdumpPromise;
+            await nmPromise;
+
+            // This part needs to run after both of the above finished
+            for (const item of this.addressToFile) {
+                const sym = this.symmbolsByAddress.get(item[0]);
+                if (sym) {
+                    sym.file = item[1];
+                } else {
+                    console.error('Unknown symbol address. Need to investigate', hexFormat(item[0]), item);
                 }
             }
-            fs.unlinkSync(useNmDumpFname);
-            return true;
+            this.addressToFile = undefined;
         }
         catch (e) {
-            this.gdbSession.handleMsg('log', `Error: ${nmProg} failed! statics/global/functions may not be properly classified: ${e.toString()}`);
-            this.gdbSession.handleMsg('log', '    Please report this problem.');
-            return false;
+            throw e;
         }
     }
 
-    public updateFunctionSize(node: SymbolNode, len: number) {
-        this.functionsAsTree.remove(node);
-        node = new SymbolNode(node.func, node.low, node.low + len - 1);
-        this.functionsAsTree.insert(node);
+    private addressToFile: Map<number, string>;
+    private readNmSymbolLine(line: string, err: any): boolean {
+        const match = line && line.match(NM_SYMBOL_RE);
+        if (match) {
+            const address = parseInt(match[1], 16);
+            const file = SymbolTable.NormalizePath(match[2]);
+            this.addressToFile.set(address, file);
+            this.addPathVariations(file);
+        }
+        return true;
+    }
+
+    public updateSymbolSize(node: SymbolNode, len: number) {
+        this.symbolsAsTree.remove(node);
+        node.symbol.length = len;
+        node = new SymbolNode(node.symbol, node.low, node.low + len - 1);
+        this.symbolsAsTree.insert(node);
     }
 
     private sortGlobalVars() {
@@ -492,73 +568,6 @@ export class SymbolTable {
         return value;
     }
 
-    protected readNonSymbolStuff(fileName: string, readFileMaps: boolean): string {
-        try {
-            const start = Date.now();
-            let str = fs.readFileSync(fileName, {encoding: 'utf8'});
-            if (readFileMaps) {
-                let counter = 0;
-                let match: RegExpExecArray;
-                let end = str.length;
-                const compUnit = RegExp(COMP_UNIT_REGEX);
-                while ((match = compUnit.exec(str)) !== null) {
-                    if (end > match.index) {
-                        end = match.index;
-                    }
-                    const { curSimpleName, curName } = this.addPathVariations(match[2]);
-                    const compDir = RegExp(COMP_DIR_REGEX);
-                    match = compDir.exec(match[3]);
-                    if (match) {
-                        // Do not use path.join below. Match[1] can be in non-native form. Will be fixed by addToFileMap.
-                        this.addToFileMap(curSimpleName, match[2] + '/' + curName);
-                    }
-                    counter++;
-                }
-                const diff = Date.now() - start;
-                if (debugConsoleLogging) {
-                    console.log(`Runtime = ${diff}ms`);
-                }
-                if (end !== str.length) {
-                    str = str.substring(0, end);
-                }
-            }
-            const memRegionsEnd = RegExp(/^SYMBOL TABLE:\r?\n/m);
-            let match = memRegionsEnd.exec(str);
-            if (match) {
-                const head = str.substring(0, match.index);
-                str = str.substring(match.index);
-                // Header:
-                // Idx Name          Size      VMA       LMA       File off  Algn
-                // Sample entry:
-                //   0 .cy_m0p_image 000025d4  10000000  10000000  00010000  2**2
-                //                   CONTENTS, ALLOC, LOAD, READONLY, DATA
-                //                                    1          2          3          4          5          6         7
-                // const entry = RegExp(/^\s*[0-9]+\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)[^\n]+\n\s*([^\r\n]*)\r?\n/gm);
-                const entry = RegExp(/^\s*[0-9]+\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\s]+)\s+([^\r\n]*)\r?\n/gm);
-                while (match = entry.exec(head)) {
-                    const attrs = match[7].trim().toLowerCase().split(/[,\s]+/g);
-                    if (!attrs.find((s) => s === 'alloc')) {
-                        // Technically we only need regions marked for code but lets get all non-debug, non-comment stuff
-                        continue;
-                    }
-                    const region = new MemoryRegion(
-                        match[1],
-                        parseInt(match[2], 16),  // size
-                        parseInt(match[3], 16),  // vma
-                        parseInt(match[4], 16),  // lma
-                        attrs
-                    );
-                    this.memoryRegions.push(region);
-                }
-            }
-
-            return str;
-        }
-        catch (e) {
-            return '';
-        }
-    }
-
     private addPathVariations(fileString: string) {
         const curName = SymbolTable.NormalizePath(fileString);
         const curSimpleName = path.basename(curName);
@@ -571,12 +580,13 @@ export class SymbolTable {
     protected getFileNameHashed(fileName: string): string {
         try {
             fileName = SymbolTable.NormalizePath(fileName);
-            const schemaVer = 3;   // Please increment if schema changes or how objdump is invoked changes
+            const schemaVer = SymbolTable.CurrentVersion;   // Please increment if schema changes or how objdump is invoked changes
             const maj = this.gdbSession.miDebugger.gdbMajorVersion;
             const min = this.gdbSession.miDebugger.gdbMinorVersion;
             const ver = `v${schemaVer}-gdb.${maj}.${min}`;
             const stats = fs.statSync(fileName);            // Can fail
-            const str = `${fileName}-${stats.mtimeMs}-${os.userInfo().username}-${ver}`;
+            const cwd = process.cwd;
+            const str = `${fileName}-${stats.mtimeMs}-${ver}-${cwd}`;
             const hasher = crypto.createHash('sha256');
             hasher.update(str);
             const ret = hasher.digest('hex');
@@ -587,53 +597,21 @@ export class SymbolTable {
         }
     }
 
-    private createFileMapCacheFileName(fileName: string) {
-        const hash = this.getFileNameHashed(fileName) + '.json';
+    private createFileMapCacheFileName(fileName: string, suffix = '') {
+        const hash = this.getFileNameHashed(fileName) + suffix + '.json';
         const fName = path.join(os.tmpdir(), 'Cortex-Debug-' + hash);
         return fName;
     }
 
-    protected serializeFileMaps(fileName: string): void {
-        try {
-            const fName = this.createFileMapCacheFileName(fileName);
-            const data = JSON.stringify(this.fileMap, null, ' ');
-            fs.writeFileSync(fName, data, {encoding: 'utf8'});
-            if (debugConsoleLogging) {
-                console.log(`data saved to ${fName}`);
-            }
-        }
-        catch (e) {
-            console.log(e.toString());
-        }
-    }
-
-    protected deSerializeFileMaps(fileName: string): boolean {
-        try {
-            const fName = this.createFileMapCacheFileName(fileName);
-            if (!fs.existsSync(fName)) { return false; }
-            const data = fs.readFileSync(fName, {encoding: 'utf8'});
-            this.fileMap = JSON.parse(data);
-            if (debugConsoleLogging) {
-                console.log(`data restored from ${fName}`);
-            }
-            try {
-                // On a mac, try to touch the file to keep it from getting purged
-                const tm = Date.now();
-                fs.utimesSync(fName, tm, tm);
-            }
-            catch {}
-            return true;
-        }
-        catch (e) {
-            if (debugConsoleLogging) {
-                console.log(e.toString());
-            }
-            return false;
-        }
-    }
-    
     public getFunctionAtAddress(address: number): SymbolInformation {
-        return this.allSymbols.find((s) => s.type === SymbolType.Function && s.address <= address && (s.address + s.length) > address);
+        const symNodes = this.symbolsAsTree.search(address, address);
+        for (const symNode of symNodes) {
+            if (symNode && (symNode.symbol.type === SymbolType.Function)) {
+                return symNode.symbol;
+            }
+        }
+        return null;
+        // return this.allSymbols.find((s) => s.type === SymbolType.Function && s.address <= address && (s.address + s.length) > address);
     }
 
     public getFunctionSymbols(): SymbolInformation[] {
