@@ -4,7 +4,7 @@ import {
     StackFrame, Scope, Source, Handles, Event
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
-import { MI2 } from './backend/mi2/mi2';
+import { MI2, parseReadMemResults } from './backend/mi2/mi2';
 import { extractBits, hexFormat } from './frontend/utils';
 import { Variable, VariableObject, MIError, OurDataBreakpoint, OurInstructionBreakpoint, OurSourceBreakpoint } from './backend/backend';
 import {
@@ -108,7 +108,7 @@ const traceThreads = false;
 
 export class GDBDebugSession extends DebugSession {
     private server: GDBServer;
-    private args: ConfigurationArguments;
+    public args: ConfigurationArguments;
     private ports: { [name: string]: number };
     private serverController: GDBServerController;
     public symbolTable: SymbolTable;
@@ -174,7 +174,6 @@ export class GDBDebugSession extends DebugSession {
     }
 
     protected initDebugger() {
-        this.miDebugger.on('launcherror', this.launchError.bind(this));
         this.miDebugger.on('quit', this.quitEvent.bind(this));
         this.miDebugger.on('exited-normally', this.quitEvent.bind(this));
         this.miDebugger.on('stopped', this.stopEvent.bind(this));
@@ -217,48 +216,46 @@ export class GDBDebugSession extends DebugSession {
     }
 
     private dbgSymbolTable: SymbolTable = null;
-    private async loadSymbols() {
-        // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/XXX-01.elf', 'main', null);
-        // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/bme680-driver-design_585.out', 'setup_bme680', './src/bme680_test_app.c');
-        // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/test.out', 'BSP_Delay', 'C:/Development/GitRepos/Firmware/phoenix/STM32F4/usb_bsp.c');
-        if (this.args.showDevDebugOutput) {
-            this.handleMsg('log', `Reading symbols from '${this.args.executable}'\n`);
-        }
-        this.symbolTable = new SymbolTable(
-            this,
-            this.args.toolchainPath,
-            this.args.toolchainPrefix,
-            this.args.objdumpPath,
-            this.args.executable);
-        await this.symbolTable.loadSymbols();
-
-        if (this.args.rttConfig.enabled && (this.args.rttConfig.address === 'auto')) {
-            const symName = '_SEGGER_RTT';
-            const rttSym = this.symbolTable.getGlobalOrStaticVarByName(symName);
-            if (!rttSym) {
-                this.args.rttConfig.enabled = false;
-                this.handleMsg('stderr', `Could not find symbol '${symName}' in executable. ` +
-                    'Make sure you complile/link with debug ON or you can specify your own RTT address\n');
-            } else {
-                const searchStr = this.args.rttConfig.searchId || 'SEGGER RTT';
-                this.args.rttConfig.address = '0x' + rttSym.address.toString(16);
-                this.args.rttConfig.searchSize = Math.max(this.args.rttConfig.searchSize || 0, searchStr.length);
-                this.args.rttConfig.searchId = searchStr;
-                this.args.rttConfig.clearSearch = (this.args.rttConfig.clearSearch === undefined) ? true : this.args.rttConfig.clearSearch;
-            }
-        }
-
-        // this.symbolTable.printToFile(args.executable + '.cd-dump');
-        if (this.args.showDevDebugOutput) {
-            this.handleMsg('log', 'Finished reading symbols\n');
-        }
+    private loadSymbols(): Promise<void> {
+        return new Promise<void>((resolve) => {
+            // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/XXX-01.elf', 'main', null);
+            // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/bme680-driver-design_585.out', 'setup_bme680', './src/bme680_test_app.c');
+            // this.dbgSymbolStuff(args, '/Users/hdm/Downloads/test.out', 'BSP_Delay', 'C:/Development/GitRepos/Firmware/phoenix/STM32F4/usb_bsp.c');
+            this.symbolTable = new SymbolTable(this, this.args.executable);
+            this.symbolTable.loadSymbols().then(() => {
+                if (this.args.rttConfig.enabled) {
+                    const symName = this.symbolTable.rttSymbolName;
+                    if (!this.args.rttConfig.address) {
+                        this.handleMsg('stderr', 'INFO: "rttConfig.address" not specified. Defaulting to "auto"\n');
+                        this.args.rttConfig.address = 'auto';
+                    }
+                    if (this.args.rttConfig.address === 'auto') {
+                        const rttSym = this.symbolTable.getGlobalOrStaticVarByName(symName);
+                        if (!rttSym) {
+                            this.args.rttConfig.enabled = false;
+                            this.handleMsg('stderr', `Could not find symbol '${symName}' in executable. ` +
+                                'Make sure you compile/link with debug ON or you can specify your own RTT address\n');
+                        } else {
+                            const searchStr = this.args.rttConfig.searchId || 'SEGGER RTT';
+                            this.args.rttConfig.address = '0x' + rttSym.address.toString(16);
+                            this.args.rttConfig.searchSize = Math.max(this.args.rttConfig.searchSize || 0, searchStr.length);
+                            this.args.rttConfig.searchId = searchStr;
+                            this.args.rttConfig.clearSearch = (this.args.rttConfig.clearSearch === undefined) ? true : this.args.rttConfig.clearSearch;
+                        }
+                    }
+                }
+                resolve();
+            }, (e) => {
+                this.handleMsg('log', `WARNING: Loading symbols failed. Please report this issue. Debugging may still work ${e}\n`);
+                resolve();
+            });
+        });
     }
 
     private async dbgSymbolStuff(args: ConfigurationArguments, elfFile: string, func: string, file: string) {
         if (os.userInfo().username === 'hdm') {
             this.handleMsg('log', `Reading symbols from ${elfFile}\n`);
-            const toolchainPath = true ? '/Applications/ARM/bin' : args.toolchainPath;
-            const tmpSymbols = new SymbolTable(this, toolchainPath, args.toolchainPrefix, args.objdumpPath, elfFile);
+            const tmpSymbols = new SymbolTable(this, elfFile);
             this.dbgSymbolTable = tmpSymbols;
             await tmpSymbols.loadSymbols('/Users/hdm/Downloads/objdump.txt');
             tmpSymbols.printToFile(elfFile + '.cd-dump');
@@ -310,6 +307,20 @@ export class GDBDebugSession extends DebugSession {
                 }
                 return dec;
             });
+        }
+
+        if (args.chainedConfigurations && args.chainedConfigurations.enabled && args.chainedConfigurations.launches) {
+            for (const config of args.chainedConfigurations.launches) {
+                let folder = config.folder || args.cwd || process.cwd();
+                if (!path.isAbsolute(folder)) {
+                    folder = path.join(args.cwd || process.cwd(), folder);
+                }
+                folder = path.normalize(folder).replace('\\', '/');
+                while ((folder.length > 1) && folder.endsWith('/') && !folder.endsWith(':/')) {
+                    folder = folder.substring(0, folder.length - 1);
+                }
+                config.folder = folder;
+            }
         }
 
         return args;
@@ -368,19 +379,23 @@ export class GDBDebugSession extends DebugSession {
         this.disassember = new GdbDisassembler(this, this.args);
         // dbgResumeStopCounter = 0;
 
-        if (!await this.startGdb(response)) {
+        this.serverConsoleLog(`******* Starting new session request type="${this.args.request}"`);
+
+        if (!this.getGdbPath(response)) {
             return;
         }
-
+        const symbolsPromise = this.loadSymbols();      // This is totally async and in most cases, done while gdb is starting
+        const gdbPromise = this.startGdb(response);
         const usingParentServer = this.args.pvtMyConfigFromParent && !this.args.pvtMyConfigFromParent.detached;
         this.getTCPPorts(usingParentServer).then(() => {
             const executable = usingParentServer ? null : this.serverController.serverExecutable();
             const args = usingParentServer ? [] : this.serverController.serverArguments();
+            const serverCwd = this.getServerCwd(executable);
 
             if (executable) {
                 const dbgMsg = 'Launching gdb-server: ' + quoteShellCmdLine([executable, ...args]) + '\n';
                 this.handleMsg('log', dbgMsg);
-                this.handleMsg('log', `Please check TERMINAL tab (gdb-server) for output from ${executable}` + '\n');
+                this.handleMsg('log', `    Please check TERMINAL tab (gdb-server) for output from ${executable}` + '\n');
             }
 
             const consolePort = (this.args as any).gdbServerConsolePort;
@@ -391,9 +406,8 @@ export class GDBDebugSession extends DebugSession {
                 if (this.args.overrideGDBServerStartedRegex) {
                     initMatch = new RegExp(this.args.overrideGDBServerStartedRegex, 'i');
                 }
-
                 if (consolePort === undefined) {
-                    this.sendErrorResponse(
+                    this.launchErrorResponse(
                         response,
                         107,
                         'GDB Server Console tcp port is undefined.'
@@ -401,13 +415,12 @@ export class GDBDebugSession extends DebugSession {
                     return;
                 }
             }
-            this.server = new GDBServer(this.args.cwd, executable, args, initMatch, gdbPort, consolePort);
-            this.server.on('quit', () => {
+            this.server = new GDBServer(serverCwd, executable, args, initMatch, gdbPort, consolePort);
+            this.server.on('exit', () => {
                 if (this.started) {
-                    this.quitEvent();
-                }
-                else {
-                    this.sendErrorResponse(
+                    this.serverQuitEvent();
+                } else {
+                    this.launchErrorResponse(
                         response,
                         103,
                         `${this.serverController.name} GDB Server Quit Unexpectedly. See gdb-server output for more details.`
@@ -415,7 +428,7 @@ export class GDBDebugSession extends DebugSession {
                 }
             });
             this.server.on('launcherror', (err) => {
-                this.sendErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: ${err.toString()}`);
+                this.launchErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: ${err.toString()}`);
             });
 
             let timeout = setTimeout(() => {
@@ -425,7 +438,7 @@ export class GDBDebugSession extends DebugSession {
                     'Launching Server',
                     `Failed to launch ${this.serverController.name} GDB Server: Timeout.`
                 ));
-                this.sendErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: Timeout.`);
+                this.launchErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: Timeout.`);
             }, GDBServer.SERVER_TIMEOUT);
 
             this.serverController.serverLaunchStarted();
@@ -434,20 +447,24 @@ export class GDBDebugSession extends DebugSession {
                     clearTimeout(timeout);
                     timeout = null;
                 }
-
-                await this.serverController.serverLaunchCompleted();
-                this.sendEvent(new GenericCustomEvent('post-start-server', this.args));
-
                 const commands = [
                     `interpreter-exec console "source ${this.args.extensionPath}/support/gdbsupport.init"`,
                     `interpreter-exec console "source ${this.args.extensionPath}/support/gdb-swo.init"`
                 ];
-
-                if (!this.args.variableUseNaturalFormat) {
-                    commands.push(...this.formatRadixGdbCommand());
-                }
-
                 try {
+                    // This is where 4 things meet
+                    // 1. Gdb has been started
+                    // 2. We read the symbols for ourselves
+                    // 3,4. Found free TCP ports and launched gdb-server
+                    await gdbPromise;
+                    await this.symbolTable.loadSymbolsFromGdb();
+                    await symbolsPromise;
+                    await this.serverController.serverLaunchCompleted();
+                    this.sendEvent(new GenericCustomEvent('post-start-server', this.args));
+
+                    if (!this.args.variableUseNaturalFormat) {
+                        commands.push(...this.formatRadixGdbCommand());
+                    }
                     commands.push(...this.serverController.initCommands());
 
                     if (attach) {
@@ -456,8 +473,7 @@ export class GDBDebugSession extends DebugSession {
                             this.args.overrideAttachCommands.map(COMMAND_MAP) : this.serverController.attachCommands();
                         commands.push(...attachCommands);
                         commands.push(...this.args.postAttachCommands.map(COMMAND_MAP));
-                    }
-                    else {
+                    } else {
                         commands.push(...this.args.preLaunchCommands.map(COMMAND_MAP));
                         const launchCommands = this.args.overrideLaunchCommands != null ?
                             this.args.overrideLaunchCommands.map(COMMAND_MAP) : this.serverController.launchCommands();
@@ -468,7 +484,7 @@ export class GDBDebugSession extends DebugSession {
                 catch (err) {
                     const msg = err.toString() + '\n' + err.stack.toString();
                     this.sendEvent(new TelemetryEvent('Error', 'Launching GDB', `Failed to generate gdb commands: ${msg}`));
-                    this.sendErrorResponse(response, 104, `Failed to generate gdb commands: ${msg}`);
+                    this.launchErrorResponse(response, 104, `Failed to generate gdb commands: ${msg}`);
                     return;
                 }
 
@@ -493,7 +509,7 @@ export class GDBDebugSession extends DebugSession {
                     this.sendEvent(new GenericCustomEvent('post-start-gdb', this.args));
                     this.sendResponse(response);
                 }, (err) => {
-                    this.sendErrorResponse(response, 103, `Failed to launch GDB: ${err.toString()}`);
+                    this.launchErrorResponse(response, 103, `Failed to launch GDB: ${err.toString()}`);
                     this.sendEvent(new TelemetryEvent('Error', 'Launching GDB', err.toString()));
                     this.miDebugger.stop();     // This should also kill the server if there is one
                     this.server.exit();
@@ -509,14 +525,45 @@ export class GDBDebugSession extends DebugSession {
                     'Launching Server',
                     `Failed to launch ${this.serverController.name} GDB Server: ${error.toString()}`
                 ));
-                this.sendErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: ${error.toString()}`);
+                this.launchErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: ${error.toString()}`);
                 this.server.exit();
             });
 
         }, (err) => {
             this.sendEvent(new TelemetryEvent('Error', 'Launching Server', `Failed to find open ports: ${err.toString()}`));
-            this.sendErrorResponse(response, 103, `Failed to find open ports: ${err.toString()}`);
+            this.launchErrorResponse(response, 103, `Failed to find open ports: ${err.toString()}`);
         });
+    }
+
+    // There are so many ways launching can fail but we only want to send the error response once.
+    // However, send everything to the Debug Console anyways.
+    private errResponseSent = false;
+    private launchErrorResponse(response: DebugProtocol.LaunchResponse, code: number, msg: string) {
+        this.handleMsg('stderr', `Error ${code}: ` + msg.endsWith('\n') ? msg : msg + '\n');
+        if (!this.errResponseSent) {
+            this.errResponseSent = true;
+            this.sendErrorResponse(response, code, msg);
+        }
+    }
+
+    //
+    // Following function should never exist. The only way ST tools work is if the are run from the dir. where the
+    // executable lives. Tried setting LD_LIBRARY_PATH, worked for some people and broke other peoples environments.
+    // Normally, we NEED the server's CWD to be same as what the user wanted from the config. Because this where
+    // the server scripts (OpenOCD, JLink, etc.) live and changing cwd for all servers will break for other servers
+    // that are not so quirky.
+    //
+    private getServerCwd(serverExe: string) {
+        let serverCwd = this.args.cwd || process.cwd();
+        if (this.args.serverCwd) {
+            serverCwd = this.args.serverCwd;
+        } else if (this.args.servertype === 'stlink') {
+            serverCwd = path.dirname(serverExe) || '.';
+            if (serverCwd !== '.') {
+                this.handleMsg('log', `Setting GDB-SErver CWD: ${serverCwd}\n`);
+            }
+        }
+        return serverCwd;
     }
 
     private notifyStopped(doCustom = true) {
@@ -569,8 +616,10 @@ export class GDBDebugSession extends DebugSession {
                     if (timeout) {
                         clearTimeout(timeout);
                         timeout = null;
-                        this.startComplete(mode);
                     }
+                    // Wether the breakpoint worked or we were forced to interrupt with the timeout,
+                    // we need to synchronize the states and finish up the startup sequence.
+                    this.startComplete(mode);
                 });
                 this.sendContinue();
             }, (err) => {
@@ -590,61 +639,58 @@ export class GDBDebugSession extends DebugSession {
         }
     }
 
-    private async startGdb(response: DebugProtocol.LaunchResponse): Promise<boolean> {
+    private getGdbPath(response: DebugProtocol.LaunchResponse): string {
         let gdbExePath = os.platform() !== 'win32' ? `${this.args.toolchainPrefix}-gdb` : `${this.args.toolchainPrefix}-gdb.exe`;
         if (this.args.toolchainPath) {
             gdbExePath = path.normalize(path.join(this.args.toolchainPath, gdbExePath));
         }
+        const gdbMissingMsg = `GDB executable "${gdbExePath}" was not found.\n` +
+            'Please configure "cortex-debug.armToolchainPath" or "cortex-debug.gdbPath" correctly.';
+        
         if (this.args.gdbPath) {
             gdbExePath = this.args.gdbPath;
-        }
-
-        // Check to see if gdb exists.
-        if (path.isAbsolute(gdbExePath)) {
+        } else if (path.isAbsolute(gdbExePath)) {
             if (fs.existsSync(gdbExePath) === false) {
-                this.sendErrorResponse(
-                    response,
-                    103,
-                    `GDB executable "${gdbExePath}" was not found.\n` +
-                    'Please configure "cortex-debug.armToolchainPath" or "cortex-debug.gdbPath" correctly.'
-                );
-                return false;
+                this.launchErrorResponse(response, 103, gdbMissingMsg);
+                return null;
             }
         }
-        else {
-            if (!hasbin.sync(gdbExePath.replace('.exe', ''))) {
-                this.sendErrorResponse(
-                    response,
-                    103,
-                    `GDB executable "${gdbExePath}" was not found.\n` +
-                    'Please configure "cortex-debug.armToolchainPath" or "cortex-debug.gdbPath"  correctly.'
-                );
-                return false;
-            }
+        else if (!hasbin.sync(gdbExePath.replace('.exe', ''))) {
+            this.launchErrorResponse(response, 103, gdbMissingMsg);
+            return null;
         }
+        this.args.gdbPath = gdbExePath;     // This now becomes the official gdb-path
+        return gdbExePath;
+    }
 
+    private startGdb(response: DebugProtocol.LaunchResponse): Promise<void> {
+        const gdbExePath = this.args.gdbPath;
         let gdbargs = ['-q', '--interpreter=mi2'];
         gdbargs = gdbargs.concat(this.args.debuggerArgs || []);
         const dbgMsg = 'Launching GDB: ' + quoteShellCmdLine([gdbExePath, ...gdbargs, this.args.executable]) + '\n';
         this.handleMsg('log', dbgMsg);
         if (!this.args.showDevDebugOutput) {
-            this.handleMsg('log', 'Set "showDevDebugOutput": true in your "launch.json" to see verbose GDB transactions ' +
+            this.handleMsg('log', '    Set "showDevDebugOutput": true in your "launch.json" to see verbose GDB transactions ' +
                 'here. Helpful to debug issues or report problems\n');
-            if (this.args.chainedConfigurations && this.args.chainedConfigurations.enabled) {
-                const str = JSON.stringify({chainedConfigurations: this.args.chainedConfigurations}, null, 4);
-                this.handleMsg('log', str + '\n');
-            }
+        }
+        if (this.args.showDevDebugOutput && this.args.chainedConfigurations && this.args.chainedConfigurations.enabled) {
+            const str = JSON.stringify({chainedConfigurations: this.args.chainedConfigurations}, null, 4);
+            this.handleMsg('log', str + '\n');
         }
 
         this.miDebugger = new MI2(gdbExePath, gdbargs);
         this.miDebugger.debugOutput = this.args.showDevDebugOutput as ADAPTER_DEBUG_MODE;
+        this.miDebugger.on('launcherror', (err) => {
+            const msg = 'Could not start GDB process, does the program exist in filesystem?\n' + err.toString() + '\n';
+            this.launchErrorResponse(response, 103, msg);
+            this.quitEvent();
+        });
         this.initDebugger();
-        await this.miDebugger.start(this.args.cwd, this.args.executable, [
+        const ret = this.miDebugger.start(this.args.cwd, this.args.executable, [
             'interpreter-exec console "set print demangle on"',
             'interpreter-exec console "set print asm-demangle on"'
         ]);
-        this.loadSymbols();
-        return true;
+        return ret;
     }
 
     private async sendContinue(wait: boolean = false) {
@@ -702,7 +748,7 @@ export class GDBDebugSession extends DebugSession {
     }
 
     protected isMIStatusStopped(): boolean {
-        // We get the status from the MI because we may not have recieved the event yet
+        // We get the status from the MI because we may not have received the event yet
         return (this.miDebugger.status !== 'running');
     }
 
@@ -732,7 +778,22 @@ export class GDBDebugSession extends DebugSession {
         return new Promise<boolean>((resolve, reject) => {
             const doResolve = () => {
                 if (this.args.noDebug || (shouldContinue && this.isMIStatusStopped())) {
-                    this.sendContinue();
+                    if ((mode === SessionMode.LAUNCH) && !this.args.breakAfterReset) {
+                        // This is a total hack. We should be able to continue but VSCode is confused at our state
+                        // unless we let it query the thread-id's at least once in the session. Or, even though the button
+                        // state is right we never get interrupt (pause) requests when user presses on it.
+                        const interval = 5;
+                        let tries = 250 / interval;
+                        this.threadIdsCalledHack = false;
+                        const to = setInterval(() => {
+                            if ((tries-- <= 0) || this.threadIdsCalledHack) {
+                                clearInterval(to);
+                                this.sendContinue();
+                            }
+                        }, interval);
+                    } else {
+                        this.sendContinue();
+                    }
                     resolve(true);
                 } else {
                     resolve(false);
@@ -751,6 +812,11 @@ export class GDBDebugSession extends DebugSession {
                 resolve(false);
             }
         });
+    }
+
+    public serverConsoleLog(msg: string) {
+        const pid = this.miDebugger && this.miDebugger.pid > 0 ? this.miDebugger.pid : process.pid;
+        ServerConsoleLog(`${this.args.name}: ` + msg, pid);
     }
 
     protected customRequest(command: string, response: DebugProtocol.Response, args: any): void {
@@ -827,10 +893,12 @@ export class GDBDebugSession extends DebugSession {
             case 'reset-device':
                 this.resetDevice(response, args);
                 break;
-            case 'set-stop-debugging-type':
+            case 'custom-stop-debugging':
+                this.serverConsoleLog(`Got request ${command}`);
                 this.disconnectRequest2(response, args);
                 break;
             case 'notified-children-to-terminate':  // We never get this request
+                this.serverConsoleLog(`Got request ${command}`);
                 this.emit('children-terminating');
                 this.sendResponse(response);
                 break;
@@ -874,13 +942,11 @@ export class GDBDebugSession extends DebugSession {
 
     protected readMemoryRequestCustom(response: DebugProtocol.Response, startAddress: string, length: number) {
         this.miDebugger.sendCommand(`data-read-memory-bytes "${startAddress}" ${length}`).then((node) => {
-            const startAddress = node.resultRecords.results[0][1][0][0][1];
-            const endAddress = node.resultRecords.results[0][1][0][2][1];
-            const data = node.resultRecords.results[0][1][0][3][1];
-            const bytes = data.match(/[0-9a-f]{2}/g).map((b) => parseInt(b, 16));
+            const results = parseReadMemResults(node);
+            const bytes = results.data.match(/[0-9a-f]{2}/g).map((b) => parseInt(b, 16));
             response.body = {
-                startAddress: startAddress,
-                endAddress: endAddress,
+                startAddress: results.startAddress,
+                endAddress: results.endAddress,
                 bytes: bytes
             };
             this.sendResponse(response);
@@ -989,7 +1055,7 @@ export class GDBDebugSession extends DebugSession {
                     clearInterval(to);
                     to = null;
                     this.server.exit();
-                    ServerConsoleLog('disconnectRequest sendResponse 3', this.miDebugger?.pid);
+                    this.serverConsoleLog('disconnectRequest sendResponse 3');
                     this.sendResponse(response);
                 } else {
                     nTimes--;
@@ -999,14 +1065,14 @@ export class GDBDebugSession extends DebugSession {
                 if (to) {
                     clearInterval(to);
                     to = null;
-                    ServerConsoleLog('disconnectRequest sendResponse 2', this.miDebugger?.pid);
+                    this.serverConsoleLog('disconnectRequest sendResponse 2');
                     this.sendResponse(response);
                 }
             });
             // Note: If gdb exits first, then we kill the server anyways
         } else {
             this.miDebugger.once('quit', () => {
-                ServerConsoleLog('disconnectRequest sendResponse 1', this.miDebugger?.pid);
+                this.serverConsoleLog('disconnectRequest sendResponse 1');
                 this.sendResponse(response);
             });
         }
@@ -1023,11 +1089,11 @@ export class GDBDebugSession extends DebugSession {
             return;
         }
         if (this.args.chainedConfigurations && this.args.chainedConfigurations.enabled) {
-            ServerConsoleLog('Begin disconnectRequest children', this.miDebugger?.pid);
+            this.serverConsoleLog('Begin disconnectRequest children');
             this.sendEvent(new GenericCustomEvent('session-terminating', args));
             let timeout = setTimeout(() => {
                 if (timeout) {
-                    ServerConsoleLog('Timed out waiting for children to exit', this.miDebugger?.pid);
+                    this.serverConsoleLog('Timed out waiting for children to exit');
                     timeout = null;
                     this.disconnectRequest2(response, args);
                 }
@@ -1059,7 +1125,7 @@ export class GDBDebugSession extends DebugSession {
         response: DebugProtocol.DisconnectResponse | DebugProtocol.Response,
         args: DebugProtocol.DisconnectArguments): Promise<void> {
         this.isDisconnecting = true;
-        ServerConsoleLog('Begin disconnectRequest', this.miDebugger?.pid);
+        this.serverConsoleLog('Begin disconnectRequest');
         const doDisconnectProcessing = async () => {
             await this.tryDeleteBreakpoints();
             this.disableSendStoppedEvents = false;
@@ -1132,7 +1198,7 @@ export class GDBDebugSession extends DebugSession {
 
             this.miDebugger.restart(commands).then((done) => {
                 if (this.args.chainedConfigurations && this.args.chainedConfigurations.enabled) {
-                    ServerConsoleLog(`Begin ${mode} children`, this.miDebugger?.pid);
+                    this.serverConsoleLog(`Begin ${mode} children`);
                     this.sendEvent(new GenericCustomEvent(`session-${mode}`, args));
                 }
     
@@ -1168,8 +1234,7 @@ export class GDBDebugSession extends DebugSession {
     protected wrapTimeStamp(str: string): string {
         if (this.args.showDevDebugOutput && this.args.showDevDebugTimestamps) {
             const elapsed = Date.now() - this.timeStart;
-            let elapsedStr = elapsed.toString();
-            while (elapsedStr.length < 10) { elapsedStr = '0' + elapsedStr; }
+            const elapsedStr = elapsed.toString().padStart(10, '0');
             return elapsedStr + ': ' + str;
         } else {
             return str;
@@ -1182,7 +1247,7 @@ export class GDBDebugSession extends DebugSession {
 
     public handleMsg(type: string, msg: string) {
         if (this.suppressRadixMsgs && (type === 'console') && /radix/.test(msg)) {
-            // Filter out unneccessary radix change messages
+            // Filter out unnecessary radix change messages
             return;
         }
         if (type === 'target') { type = 'stdout'; }
@@ -1356,7 +1421,17 @@ export class GDBDebugSession extends DebugSession {
             this.sendEvent(new ThreadEvent('exited', thId));
         }
         this.activeThreadIds.clear();
-        // this.sendEvent(new TerminatedEvent());
+        /*
+        if (this.started) {
+            // If this is happening after the session has started, it means that gdb probably lost connection
+            // with the server, but keeps running
+            if (this.miDebugger.isRunning() && !this.quit) {
+                // Server quit before gdb quit. Maybe it crashed. Gdb is still running so stop it
+                // which will in turn notify VSCode via `quitEvent()`
+                this.miDebugger.stop();
+            }
+        }
+        */
     }
 
     protected stopEvent(info: MINode, reason: string = 'exception') {
@@ -1374,28 +1449,30 @@ export class GDBDebugSession extends DebugSession {
     }
 
     protected quitEvent() {
+        this.quit = true;
         if (traceThreads) {
             this.handleMsg('log', '**** quit event\n');
         }
         if (this.server && this.server.isProcessRunning()) {
             // A gdb quit may be happening with VSCode asking us to finish or a crash or user doing something
-            ServerConsoleLog('quitEvent: Killing server', this.miDebugger?.pid);
+            this.serverConsoleLog('quitEvent: Killing server');
             this.server.exit();
         }
-        this.quit = true;
         setTimeout(() => {
             // In case GDB quit because of normal processing, let that process finish. Wait for,\
-            // a disconnect reponse to be sent before we send a TerminatedEvent();. Note that we could
+            // a disconnect response to be sent before we send a TerminatedEvent();. Note that we could
             // also be here because the server crashed/quit on us before gdb-did
-            ServerConsoleLog('quitEvent: sending VSCode TerminatedEvent', this.miDebugger?.pid);
+            this.serverConsoleLog('quitEvent: sending VSCode TerminatedEvent');
             this.sendEvent(new TerminatedEvent());
         }, 10);
     }
 
-    protected launchError(err: any) {
-        this.handleMsg('stderr', 'Could not start debugger process, does the program exist in filesystem?\n');
-        this.handleMsg('stderr', err.toString() + '\n');
-        this.quitEvent();
+    protected serverQuitEvent() {
+        if (this.miDebugger.isRunning() && !this.quit) {
+            // Server quit before gdb quit. Maybe it crashed. Gdb is still running so stop it
+            // which will in turn notify VSCode via `quitEvent()`
+            this.miDebugger.stop();
+        }
     }
 
     // returns [threadId, frameId]
@@ -1841,11 +1918,13 @@ export class GDBDebugSession extends DebugSession {
         }
     }
 
+    private threadIdsCalledHack = false;
     protected async threadsRequest(response: DebugProtocol.ThreadsResponse): Promise<void> {
+        response.body = { threads: [] };
         if (!this.isMIStatusStopped() || !this.stopped || this.disableSendStoppedEvents || this.continuing) {
-            response.body = { threads: [] };
             this.sendResponse(response);
-            return Promise.resolve();
+            this.threadIdsCalledHack = true;
+            return;
         }
         try {
             const threadIdNode = await this.miDebugger.sendCommand('thread-list-ids');
@@ -1854,9 +1933,9 @@ export class GDBDebugSession extends DebugSession {
 
             if (!threadIds || (threadIds.length === 0)) {
                 // Yes, this does happen at the very beginning of an RTOS session
-                response.body = { threads: [] };
                 this.sendResponse(response);
-                return Promise.resolve();
+                this.threadIdsCalledHack = true;
+                return;
             }
 
             for (const thId of threadIds) {
@@ -1929,22 +2008,26 @@ export class GDBDebugSession extends DebugSession {
                 threads: threads
             };
             this.sendResponse(response);
+            this.threadIdsCalledHack = true;
         }
         catch (e) {
-            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occured
+            this.threadIdsCalledHack = true;
+            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occurred
                 this.sendErrorResponse(response, 1, `Unable to get thread information: ${e}`);
+            } else {
+                this.sendResponse(response);
             }
         }
     }
 
     protected async stackTraceRequest(response: DebugProtocol.StackTraceResponse, args: DebugProtocol.StackTraceArguments): Promise<void> {
+        response.body = {
+            stackFrames: [],
+            totalFrames: 0
+        };
         if (!this.isMIStatusStopped() || !this.stopped || this.disableSendStoppedEvents || this.continuing) {
-            response.body = {
-                stackFrames: [],
-                totalFrames: 0
-            };
             this.sendResponse(response);
-            return Promise.resolve();
+            return;
         }
         try {
             const maxDepth = await this.miDebugger.getStackDepth(args.threadId);
@@ -2036,8 +2119,10 @@ export class GDBDebugSession extends DebugSession {
             this.sendResponse(response);
         }
         catch (err) {
-            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occured
+            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occurred
                 this.sendErrorResponse(response, 12, `Failed to get Stack Trace: ${err.toString()}`);
+            } else {
+                this.sendResponse(response);
             }
         }
     }
@@ -2253,18 +2338,18 @@ export class GDBDebugSession extends DebugSession {
         try {
             const frame = await this.miDebugger.getFrame(threadId, frameId);
             let file = frame.file; // Prefer full path name first
-            let staticSymbols = this.symbolTable.getStaticVariables(file);
-            if (!staticSymbols || (staticSymbols.length === 0)) {
+            let staticNames = await this.symbolTable.getStaticVariableNames(file);
+            if (!staticNames) {
                 file = frame.fileName;
-                staticSymbols = this.symbolTable.getStaticVariables(file);
+                staticNames = await this.symbolTable.getStaticVariableNames(file) || [];
             }
 
             const hasher = crypto.createHash('sha256');
             hasher.update(file);
             const fHash = hasher.digest('hex');
 
-            for (const symbol of staticSymbols) {
-                const varObjName = this.createStaticVarName(fHash, symbol.name);
+            for (const symName of staticNames) {
+                const varObjName = this.createStaticVarName(fHash, symName);
                 let varObj: VariableObject;
                 try {
                     const changes = await this.miDebugger.varUpdate(varObjName, -1, -1);
@@ -2284,9 +2369,9 @@ export class GDBDebugSession extends DebugSession {
                         // with function/block scoped static variables (objdump uses one name and gdb uses another)
                         // Try to report what we can. Others show up under the Locals section hopefully.
                         if (err instanceof MIError && err.message === 'Variable object not found') {
-                            varObj = await this.miDebugger.varCreate(args.variablesReference, symbol.name, varObjName);
+                            varObj = await this.miDebugger.varCreate(args.variablesReference, symName, varObjName);
                             const varId = this.findOrCreateVariable(varObj);
-                            varObj.exp = symbol.name;
+                            varObj.exp = symName;
                             varObj.id = varId;
                         } else {
                             throw err;
@@ -2294,7 +2379,7 @@ export class GDBDebugSession extends DebugSession {
                     }
                     catch (err) {
                         if (this.args.showDevDebugOutput) {
-                            this.handleMsg('stderr', `Could not create static variable ${file}:${symbol.name}\n`);
+                            this.handleMsg('stderr', `Could not create static variable ${file}:${symName}\n`);
                             this.handleMsg('stderr', `Error: ${err}\n`);
                         }
                         varObj = null;
@@ -2302,7 +2387,7 @@ export class GDBDebugSession extends DebugSession {
                 }
 
                 if (varObj) {
-                    this.putFloatingVariable(args.variablesReference, symbol.name, varObj);
+                    this.putFloatingVariable(args.variablesReference, symName, varObj);
                     statics.push(varObj.toProtocolVariable());
                 }
             }
@@ -2344,10 +2429,10 @@ export class GDBDebugSession extends DebugSession {
         response: DebugProtocol.VariablesResponse,
         args: DebugProtocol.VariablesArguments
     ): Promise<void> {
+        response.body = { variables: [] };
         if (!this.isMIStatusStopped() || !this.stopped || this.disableSendStoppedEvents || this.continuing) {
-            response.body = { variables: [] };
             this.sendResponse(response);
-            return Promise.resolve();
+            return;
         }
         const [threadId, frameId] = GDBDebugSession.decodeReference(args.variablesReference);
         const variables: DebugProtocol.Variable[] = [];
@@ -2398,8 +2483,10 @@ export class GDBDebugSession extends DebugSession {
             this.sendResponse(response);
         }
         catch (err) {
-            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occured
+            if (this.isMIStatusStopped()) {     // Between the time we asked for a info, a continue occurred
                 this.sendErrorResponse(response, 1, `Could not get stack variables: ${err}`);
+            } else {
+                this.sendResponse(response);
             }
         }
     }
@@ -2440,10 +2527,10 @@ export class GDBDebugSession extends DebugSession {
     }
 
     protected async variablesRequest(response: DebugProtocol.VariablesResponse, args: DebugProtocol.VariablesArguments): Promise<void> {
+        response.body = { variables: [] };
         if (!this.isMIStatusStopped() || !this.stopped || this.disableSendStoppedEvents || this.continuing) {
-            response.body = { variables: [] };
             this.sendResponse(response);
-            return Promise.resolve();
+            return;
         }
         let id: number | string | VariableObject | ExtendedVariable;
 

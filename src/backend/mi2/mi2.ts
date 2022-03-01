@@ -11,6 +11,24 @@ import { hexFormat } from '../../frontend/utils';
 import { ADAPTER_DEBUG_MODE } from '../../common';
 const path = posix;
 
+export interface ReadMemResults {
+    startAddress: string;
+    endAddress: string;
+    data: string;
+}
+
+export function parseReadMemResults(node: MINode): ReadMemResults {
+    const startAddress = node.resultRecords.results[0][1][0][0][1];
+    const endAddress = node.resultRecords.results[0][1][0][2][1];
+    const data = node.resultRecords.results[0][1][0][3][1];
+    const ret: ReadMemResults = {
+        startAddress: startAddress,
+        endAddress: endAddress,
+        data: data
+    };
+    return ret;
+}
+
 export function escape(str: string) {
     return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -32,27 +50,28 @@ export class MI2 extends EventEmitter implements IBackend {
     public debugOutput: ADAPTER_DEBUG_MODE;
     public procEnv: any;
     protected currentToken: number = 1;
+    protected nextTokenComing = 1;          // This will be the next token output from gdb
     protected handlers: { [index: number]: (info: MINode) => any } = {};
-    protected buffer: string;
-    protected errbuf: string;
+    protected needOutput: { [index: number]: '' } = {};
+    protected buffer: string = '';
+    protected errbuf: string = '';
     protected process: ChildProcess.ChildProcess;
     protected stream;
     protected firstStop: boolean = true;
     protected exited: boolean = false;
-    protected captureConsole: boolean = false;
-    protected capturedConsole: string = '';
     public gdbMajorVersion: number | undefined;
     public gdbMinorVersion: number | undefined;
     public status: 'running' | 'stopped' | 'none' = 'none';
     public pid: number = -1;
     protected lastContinueSeqId = -1;
     protected actuallyStarted = false;
+    public gdbVarsPromise: Promise<MINode> = null;
 
     constructor(public application: string, public args: string[]) {
         super();
     }
 
-    public start(cwd: string, executable: string, init: string[]): Thenable<any> {
+    public start(cwd: string, executable: string, init: string[]): Promise<void> {
         if (!nativePath.isAbsolute(executable)) {
             executable = nativePath.join(cwd, executable);
         }
@@ -71,16 +90,23 @@ export class MI2 extends EventEmitter implements IBackend {
 
             this.sendCommand('gdb-set target-async on', true).then(() => {
                 this.actuallyStarted = true;
-                this.startCaptureConsole();
-                this.sendCommand('gdb-version').then((v: MINode) => {
-                    const str = this.endCaptureConsole();
+                this.sendCommand('gdb-version', false, true, true).then((v: MINode) => {
+                    const str = v.output;
                     this.parseVersionInfo(str);
                     const promises = init.map((c) => this.sendCommand(c));
                     Promise.all(promises).then(() => {
+                        if (this.gdbMajorVersion >= 9) {
+                            this.gdbVarsPromise = new Promise((resolve) => {
+                                this.sendCommand('symbol-info-variables', false, false, true).then((x) => {
+                                    resolve(x);
+                                }, (e) => {
+                                    reject(e);
+                                });
+                            });
+                        }
                         resolve();
                     }, reject);
                 }, () => {
-                    const str = this.endCaptureConsole();
                     reject();
                 });
             }, () => {
@@ -93,18 +119,6 @@ export class MI2 extends EventEmitter implements IBackend {
         this.emit('launcherror', err);
     }
 
-    public startCaptureConsole(): void {
-        this.captureConsole = true;
-        this.capturedConsole = '';
-    }
-
-    public endCaptureConsole(): string {
-        const ret = this.capturedConsole;
-        this.captureConsole = false;
-        this.capturedConsole = '';
-        return ret;
-    }
-
     private parseVersionInfo(str: string) {
         const regex = RegExp(/^GNU gdb\s\(.*\)\s?(\d+)\.(\d+)\.[^\r\n]*/gm);
         const match = regex.exec(str);
@@ -113,7 +127,7 @@ export class MI2 extends EventEmitter implements IBackend {
             this.gdbMajorVersion = parseInt(match[1]);
             this.gdbMinorVersion = parseInt(match[2]);
             if (this.gdbMajorVersion < 9) {
-                this.log('stderr', 'WARNING: Cortex-Debug will deprecate use of GDB version 8. Please upgrade to version 9+\n');
+                this.log('stderr', 'WARNING: Cortex-Debug will deprecate use of GDB version 8 after July 2022. Please upgrade to version 9+\n');
             }
         }
         if (str) {
@@ -139,8 +153,11 @@ export class MI2 extends EventEmitter implements IBackend {
             }
         }
         ServerConsoleLog('GDB: exited', this.pid);
-        this.exited = true;
-        this.emit('quit');
+        if (this.process) {
+            this.process = null;
+            this.exited = true;
+            this.emit('quit');
+        }
     }
 
     private stdout(data) {
@@ -216,6 +233,12 @@ export class MI2 extends EventEmitter implements IBackend {
                         this.log('log', 'GDB -> App: ' + JSON.stringify(parsed));
                     }
                 }
+                if (parsed.token !== undefined) {
+                    if (this.needOutput[parsed.token] !== undefined) {
+                        parsed.output = this.needOutput[parsed.token];
+                    }
+                    this.nextTokenComing = parsed.token + 1;
+                }
                 let handled = false;
                 if (parsed.token !== undefined && parsed.resultRecords) {
                     if (this.handlers[parsed.token]) {
@@ -238,8 +261,8 @@ export class MI2 extends EventEmitter implements IBackend {
                 if (parsed.outOfBandRecord) {
                     parsed.outOfBandRecord.forEach((record) => {
                         if (record.isStream) {
-                            if (this.captureConsole && (record.type === 'console')) {
-                                this.capturedConsole += record.content;
+                            if ((record.type === 'console') && (this.needOutput[this.nextTokenComing] !== undefined)) {
+                                this.needOutput[this.nextTokenComing] += record.content;
                             } else {
                                 this.log(record.type, record.content);
                             }
@@ -351,6 +374,7 @@ export class MI2 extends EventEmitter implements IBackend {
             }
             catch (e) {
                 this.log('log', `kill failed for ${-proc.pid}` + e);
+                this.onExit();      // Process already died or quit. Cleanup
             }
         }
     }
@@ -900,28 +924,46 @@ export class MI2 extends EventEmitter implements IBackend {
         if (this.debugOutput || trace) {
             this.log('log', raw);
         }
-        if (raw.includes('undefined')) {
-            console.log(raw);
-        }
-        this.process.stdin.write(raw + '\n');
+        this.process.stdin.write(raw + '\n');   // Sometimes, process is already null
     }
 
     public getCurrentToken(): number {
         return this.currentToken;
     }
 
-    public sendCommand(command: string, suppressFailure: boolean = false): Thenable<MINode> {
+    public sendCommand(command: string, suppressFailure = false, swallowStdout = false, forceNoDebug = false): Thenable<MINode> {
         const sel = this.currentToken++;
         return new Promise((resolve, reject) => {
+            const errReport = (arg: MINode | Error) => {
+                const nd = arg as MINode;
+                if (suppressFailure && nd) {
+                    this.log('stderr', `WARNING: Error executing command '${command}'`);
+                    resolve(nd);
+                } else if (!nd) {
+                    reject(new MIError(arg ? arg.toString() : 'Unknown error', command));
+                } else {
+                    reject(new MIError(nd.result('msg') || 'Internal error', command));
+                }
+            };
+            if (swallowStdout) {
+                this.needOutput[sel] = '';
+            }
+            const save = this.debugOutput;
+            if (forceNoDebug && this.debugOutput) {
+                this.log('log', `Suppressing output for '${sel}-${command}'`);
+                // We need to be more sophisticated than this. There could be other commands in flight
+                // We should do this how we do the swallowStdout
+                this.debugOutput = undefined;
+            }
             this.handlers[sel] = (node: MINode) => {
+                if (forceNoDebug) {
+                    this.debugOutput = save;
+                }
+                if (swallowStdout) {
+                    delete this.needOutput[sel];
+                }
                 if (node.resultRecords.resultClass === 'error') {
-                    if (suppressFailure) {
-                        this.log('stderr', `WARNING: Error executing command '${command}'`);
-                        resolve(node);
-                    }
-                    else {
-                        reject(new MIError(node.result('msg') || 'Internal error', command));
-                    }
+                    errReport(node);
                 }
                 else {
                     resolve(node);
@@ -930,11 +972,19 @@ export class MI2 extends EventEmitter implements IBackend {
             if (command.startsWith('exec-continue')) {
                 this.lastContinueSeqId = sel;
             }
-            this.sendRaw(sel + '-' + command);
+            try {
+                this.sendRaw(sel + '-' + command);
+            }
+            catch (e) {
+                if (forceNoDebug) {
+                    this.debugOutput = save;
+                }
+                errReport(e);
+            }
         });
     }
 
-    public isReady(): boolean {
+    public isRunning(): boolean {
         return !!this.process;
     }
 }

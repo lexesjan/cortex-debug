@@ -1,5 +1,25 @@
 ChangeLog
 =========
+# V1.3.4
+* ST-Link users may see a change a couple of changes
+  * In version 1.2.X, a change was made to automatically add certain directories to LD_LIBRARY_PATH (linux) and DYLD_LIBRARY_PATH (Mac). While that worked for most people, it can have un-intended consequences. On all platforms we now use the location of the gdb-server as the current directory to make the executable find the dynamic libraries properly
+  * In previous versions, when auto-discovering ST link install directories for the gdb-server and the programmer, we picked any installation. ST seems to ship multiple versions, so we now pick the latest version as indicated by the version number in the directory.
+  * The safest thing to do is to set the paths yourself using one of the extension settings or settings in launch.json. Normally, not an issue but can cause problems when you have multiple installs or installs in non-standard locations.
+* Bugfix: Issue #596 If neither `breakAfterReset` or `runToEntryPoint` were used, the pause button failed to work. The program would run but the debug buttons didn't do anything. We don't know which version of VSCode broke this but we created a workaround that is being tested
+
+
+# V1.3.3
+* Bigfix: Regression since introducing chained configurations a month ago. We were not waiting for the gdb-server to open a TCP port and launching gdb far ahead or time. Most times, this worked okay but this is wrong. Reverting back to old/proper behavior.
+  
+# V1.3.2
+* Major change: We now require both `objdump` and `nm` for extract the source-file, type, address and size of symbols from the executable elf file. `objdump` gives us better (not perfect) symbol information and its types but bad file information. `nm` gives good file information but is wrong in classifying symbols types (function vs data). Gdb does not give us size information, hard to correlate and very version dependent. We need everything addresses, sizes, names and origin (files). Without this, we have trouble giving a proper experience wrt Statics, Globals and other things like disassembly.<br><br>
+  There is no special setting for this. We modify the path to `objdump` and expect to find `nm` there. If not, we will continue with the debug session but experience will not be as good (you will see a warning in the Debug Console)
+* `objdump` is not exactly fast and the executable sizes are growing. `nm` is even slower. We now changed the startup process to run `objdump`, `nm` and `gdb` at the same time to improve the startup times. They are now better than before when things were done sequentially. We also launch the gdb-server (like OpenOCD) in parallel as well
+* The above two are major changes that affect the startup procedure.
+* Minor improvement in disassembly.
+* Issue #592: We were not properly detecting used TCP ports causing failures in gdb-server starts. On some systems
+* Issue #585: RTT Terminals were not being re-cycled. Instead, new ones were being created requiring manual cleanup.
+  
 # V1.3.1 (preview release for 1.4.0)
 * Improved startup code for `launch` and `attach`. Quite a bit of old unneeded code removed following VSCode's current APIs. We were doing a few things inefficiently and thew updated VSCode APIs helped. We have a few too many options for startup like `runToEntryPoint`, `breakAfterReset`, etc. along with user defined overrides/pre/post commands. These are consolidated. This will also reduce the number of updated that happen to the various windows. We tested best we could but this is yet another major change.
 * Also the reset/restart processing uses virtually the same code as startup.

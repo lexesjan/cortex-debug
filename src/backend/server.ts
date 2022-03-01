@@ -108,17 +108,12 @@ export class GDBServer extends EventEmitter {
                 this.process.kill();
             }
             catch (e) {
-                ServerConsoleLog(`Tring to force and exit failed ${e}`);
+                ServerConsoleLog(`Trying to force and exit failed ${e}`);
             }
         }
     }
 
     private onExit(code, signal) {
-        if (this.initReject) {
-            this.initReject(new Error('Server exited unexpectedly before establishing connection'));
-            this.initReject = null;
-            this.initResolve = null;
-        }
         ServerConsoleLog(`GDBServer: exited ${code} ${signal}`);
         this.process = null;
         if (this.exitTimeout) {
@@ -196,12 +191,19 @@ export class GDBServer extends EventEmitter {
                 this.consoleSocket = null;
             });
             socket.on  ('error', (e) => {
-                // Can happen if extension exited while we are still running. Rare, generally a bug in VSCode or frontend
-                const msg = `Error: unexpected socket error ${e}. Please report this problem`;
-                this.emit('output', msg + '\n');
-                console.error(msg);
-                if (!this.consoleSocket) {  // We were already connected
-                    reject(e);
+                const code: string = (e as any).code;
+                if (code !== 'ECONNRESET') {
+                    // Can happen if extension exited while we are still running. Rare, generally a bug in VSCode or frontend
+                    const msg = `Error: unexpected socket error ${e}. Please report this problem`;
+                    this.emit('output', msg + '\n');
+                    console.error(msg);
+                    if (!this.consoleSocket) {  // We were already connected
+                        reject(e);
+                    }
+                } else if (this.consoleSocket) {
+                    // Adapter died/crashed
+                    this.consoleSocket.destroy();
+                    this.consoleSocket = null;
                 }
             });
 
