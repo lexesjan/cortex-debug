@@ -25,6 +25,7 @@ import { GDBServerConsole } from './server_console';
 import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session';
 import { ServerConsoleLog } from '../backend/server';
 import { PerformanceTreeProvider } from './views/performance';
+import { PerformanceCounterNode } from './views/nodes/performancecounternode';
 
 const commandExistsSync = require('command-exists').sync;
 interface SVDInfo {
@@ -103,6 +104,7 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.toggleVariableHexFormat', this.toggleVariablesHexMode.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.performance.forceRefresh', this.performanceForceRefresh.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.performance.clearValue', this.performanceClearValue.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.examineMemory', this.examineMemory.bind(this)),
             vscode.commands.registerCommand('cortex-debug.viewDisassembly', this.showDisassembly.bind(this)),
@@ -510,6 +512,11 @@ export class CortexDebugExtension {
     // Performance
     private async performanceForceRefresh(): Promise<void> {
         await this.performanceProvider.updateData();
+        this.performanceProvider.refresh();
+    }
+
+    private async performanceClearValue(node: PerformanceCounterNode): Promise<void> {
+        await this.performanceProvider.clearValue(node);
         this.performanceProvider.refresh();
     }
 

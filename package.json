@@ -465,6 +465,11 @@
                 "icon": "$(refresh)"
             },
             {
+                "command": "cortex-debug.performance.clearValue",
+                "title": "Clear Value",
+                "icon": "$(clear-all)"
+            },
+            {
                 "category": "Cortex-Debug",
                 "command": "cortex-debug.examineMemory",
                 "title": "View Memory"
@@ -2604,6 +2609,10 @@
                     "when": "false"
                 },
                 {
+                    "command": "cortex-debug.performance.clearValue",
+                    "when": "false"
+                },
+                {
                     "command": "cortex-debug.peripherals.pin",
                     "when": "false"
                 },
@@ -2718,6 +2727,11 @@
                 {
                     "command": "cortex-debug.peripherals.setFormat",
                     "when": "view == cortex-debug.peripherals"
+                },
+                {
+                    "command": "cortex-debug.performance.clearValue",
+                    "when": "view == cortex-debug.performance && viewItem == counter",
+                    "group": "inline"
                 }
             ],
             "view/title": [

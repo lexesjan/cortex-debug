@@ -170,4 +170,11 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
         await performanceInfo?.updateData();
         this.refresh();
     }
+
+    /**
+     * Clears the value of the counter.
+     */
+    public async clearValue(node: PerformanceCounterNode): Promise<void> {
+        node.clearValue();
+    }
 }

@@ -1,4 +1,4 @@
-import { TreeItem, DebugSession } from 'vscode';
+import { TreeItem, DebugSession, debug } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
 import { BaseNode } from './basenode';
@@ -28,7 +28,10 @@ export class PerformanceCounterNode extends BaseNode {
     public getTreeItem(): TreeItem | Promise<TreeItem> {
         const label = `${this.label}: ${this.currentCount}`;
 
-        return new TreeItem(label);
+        const item = new TreeItem(label);
+        item.contextValue = 'counter';
+
+        return item;
     }
 
     /**
@@ -49,5 +52,13 @@ export class PerformanceCounterNode extends BaseNode {
         const buffer = Buffer.from(memReadResultBytes);
 
         this.currentCount = buffer.readInt32LE(0);
+    }
+
+    /**
+     * Applies the reset value to the performance counter.
+     */
+    public async clearValue(): Promise<void> {
+        this.currentCount = 0;
+        return debug.activeDebugSession.customRequest('write-memory', { address: this.baseAddress, data: '00' });
     }
 }
