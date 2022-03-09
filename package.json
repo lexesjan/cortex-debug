@@ -460,6 +460,11 @@
                 "icon": "$(pinned)"
             },
             {
+                "command": "cortex-debug.performance.forceRefresh",
+                "title": "Refresh",
+                "icon": "$(refresh)"
+            },
+            {
                 "category": "Cortex-Debug",
                 "command": "cortex-debug.examineMemory",
                 "title": "View Memory"
@@ -2595,6 +2600,10 @@
                     "when": "false"
                 },
                 {
+                    "command": "cortex-debug.performance.forceRefresh",
+                    "when": "false"
+                },
+                {
                     "command": "cortex-debug.peripherals.pin",
                     "when": "false"
                 },
@@ -2731,6 +2740,11 @@
                     "command": "cortex-debug.peripherals.forceRefresh",
                     "when": "view == cortex-debug.peripherals && debugState == stopped",
                     "group": "navigation"
+                },
+                {
+                    "command": "cortex-debug.performance.forceRefresh",
+                    "when": "view == cortex-debug.performance && debugState == stopped",
+                    "group": "navigation"
                 }
             ],
             "debug/variables/context": [
@@ -2756,6 +2770,11 @@
                 {
                     "id": "cortex-debug.registers",
                     "name": "Cortex Registers",
+                    "when": "debugType == cortex-debug"
+                },
+                {
+                    "id": "cortex-debug.performance",
+                    "name": "Cortex Performance",
                     "when": "debugType == cortex-debug"
                 }
             ]

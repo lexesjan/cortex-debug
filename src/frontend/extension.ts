@@ -24,6 +24,7 @@ import { RTTTerminal } from './rtt_terminal';
 import { GDBServerConsole } from './server_console';
 import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session';
 import { ServerConsoleLog } from '../backend/server';
+import { PerformanceTreeProvider } from './views/performance';
 
 const commandExistsSync = require('command-exists').sync;
 interface SVDInfo {
@@ -39,9 +40,11 @@ export class CortexDebugExtension {
     private peripheralProvider: PeripheralTreeProvider;
     private registerProvider: RegisterTreeProvider;
     private memoryProvider: MemoryContentProvider;
+    private performanceProvider: PerformanceTreeProvider;
 
     private peripheralTreeView: vscode.TreeView<PeripheralBaseNode>;
     private registerTreeView: vscode.TreeView<BaseNode>;
+    private performanceTreeView: vscode.TreeView<BaseNode>;
 
     private SVDDirectory: SVDInfo[] = [];
     private functionSymbols: SymbolInformation[] = null;
@@ -52,6 +55,7 @@ export class CortexDebugExtension {
         this.peripheralProvider = new PeripheralTreeProvider();
         this.registerProvider = new RegisterTreeProvider();
         this.memoryProvider = new MemoryContentProvider();
+        this.performanceProvider = new PerformanceTreeProvider();
 
         let tmp = [];
         try {
@@ -68,6 +72,10 @@ export class CortexDebugExtension {
 
         this.registerTreeView = vscode.window.createTreeView('cortex-debug.registers', {
             treeDataProvider: this.registerProvider
+        });
+
+        this.performanceTreeView = vscode.window.createTreeView('cortex-debug.performance', {
+            treeDataProvider: this.performanceProvider
         });
 
         vscode.commands.executeCommand('setContext', `cortex-debug:${CortexDebugKeys.REGISTER_DISPLAY_MODE}`,
@@ -93,6 +101,8 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.varHexModeTurnOn', this.variablesNaturalMode.bind(this, false)),
             vscode.commands.registerCommand('cortex-debug.varHexModeTurnOff', this.variablesNaturalMode.bind(this, true)),
             vscode.commands.registerCommand('cortex-debug.toggleVariableHexFormat', this.toggleVariablesHexMode.bind(this)),
+
+            vscode.commands.registerCommand('cortex-debug.performance.forceRefresh', this.performanceForceRefresh.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.examineMemory', this.examineMemory.bind(this)),
             vscode.commands.registerCommand('cortex-debug.viewDisassembly', this.showDisassembly.bind(this)),
@@ -120,6 +130,7 @@ export class CortexDebugExtension {
             this.registerTreeView.onDidExpandElement((e) => {
                 e.element.expanded = true;
             }),
+
             this.peripheralTreeView,
             this.peripheralTreeView.onDidExpandElement((e) => {
                 e.element.expanded = true;
@@ -128,7 +139,9 @@ export class CortexDebugExtension {
             }),
             this.peripheralTreeView.onDidCollapseElement((e) => {
                 e.element.expanded = false;
-            })
+            }),
+
+            this.performanceTreeView
         );
     }
 
@@ -494,6 +507,12 @@ export class CortexDebugExtension {
         }
     }
 
+    // Performance
+    private async performanceForceRefresh(): Promise<void> {
+        await this.performanceProvider.updateData();
+        this.performanceProvider.refresh();
+    }
+
     // Settings changes
     private registersNaturalMode(newVal: any) {
         const config = vscode.workspace.getConfiguration('cortex-debug');
@@ -572,6 +591,7 @@ export class CortexDebugExtension {
                 this.registerProvider.debugSessionStarted(session);
             }
             this.peripheralProvider.debugSessionStarted(session, (svdfile && !args.noDebug) ? svdfile : null, args.svdAddrGapThreshold);
+            this.performanceProvider.debugSessionStarted(session);
             this.cleanupRTTTerminals();
         }, (error) => {
             // TODO: Error handling for unable to get arguments
@@ -588,6 +608,7 @@ export class CortexDebugExtension {
                 this.registerProvider.debugSessionTerminated(session);
             }
             this.peripheralProvider.debugSessionTerminated(session);
+            this.performanceProvider.debugSessionTerminated(session);
             if (mySession?.swo) {
                 mySession.swo.debugSessionTerminated();
             }
@@ -799,6 +820,7 @@ export class CortexDebugExtension {
         const mySession = CDebugSession.FindSession(e.session);
         mySession.status = 'stopped';
         this.peripheralProvider.debugStopped(e.session);
+        this.performanceProvider.debugStopped(e.session)
         if (this.isDebugging(e.session)) {
             this.registerProvider.debugStopped(e.session);
         }
