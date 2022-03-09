@@ -59,6 +59,6 @@ export class PerformanceCounterNode extends BaseNode {
      */
     public async clearValue(): Promise<void> {
         this.currentCount = 0;
-        return debug.activeDebugSession.customRequest('write-memory', { address: this.baseAddress, data: '00' });
+        return debug.activeDebugSession.customRequest('write-memory', { address: this.baseAddress, data: '00000000' });
     }
 }
