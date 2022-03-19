@@ -9,7 +9,7 @@ import {
 } from 'vscode';
 import { BaseNode } from './nodes/basenode';
 import { MessageNode } from './nodes/messagenode';
-import { PerformanceCounterNode } from './nodes/performancecounternode';
+import { PerformanceCycleCounterNode } from './nodes/performancecyclecounternode';
 
 // DWT register addresses.
 const DWT_CYCCNT = 0xe0001004;
@@ -20,7 +20,7 @@ const DWT_LSUCNT = 0xe0001014;
  */
 export class PerformanceTreeForSession extends BaseNode {
     public myTreeItem: TreeItem;
-    public performanceCounterNodes: PerformanceCounterNode[];
+    public performanceCounterNodes: PerformanceCycleCounterNode[];
 
     constructor(public session: DebugSession, public state: TreeItemCollapsibleState) {
         super();
@@ -57,8 +57,8 @@ export class PerformanceTreeForSession extends BaseNode {
      * Initialise the performance counter tabs on startup.
      */
     public debugSessionStarted(): void {
-        this.performanceCounterNodes.push(new PerformanceCounterNode(this.session, 'Cycle count', DWT_CYCCNT));
-        this.performanceCounterNodes.push(new PerformanceCounterNode(this.session, 'Load / store count', DWT_LSUCNT));
+        this.performanceCounterNodes.push(new PerformanceCycleCounterNode(this.session, 'Cycle count', DWT_CYCCNT));
+        this.performanceCounterNodes.push(new PerformanceCycleCounterNode(this.session, 'Load / store count', DWT_LSUCNT));
     }
 
     /**
@@ -174,7 +174,7 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
     /**
      * Clears the value of the counter.
      */
-    public async clearValue(node: PerformanceCounterNode): Promise<void> {
+    public async clearValue(node: PerformanceCycleCounterNode): Promise<void> {
         node.clearValue();
     }
 }

@@ -3,7 +3,7 @@ import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
 import { BaseNode } from './basenode';
 
-export class PerformanceCounterNode extends BaseNode {
+export class PerformanceCycleCounterNode extends BaseNode {
     private currentCount: number;
     private memoryReadAddressRange: AddrRange[];
 

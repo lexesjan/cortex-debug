@@ -25,7 +25,7 @@ import { GDBServerConsole } from './server_console';
 import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session';
 import { ServerConsoleLog } from '../backend/server';
 import { PerformanceTreeProvider } from './views/performance';
-import { PerformanceCounterNode } from './views/nodes/performancecounternode';
+import { PerformanceCycleCounterNode } from './views/nodes/performancecyclecounternode';
 import { RTOSTracker } from './rtos/rtos';
 
 const commandExistsSync = require('command-exists').sync;
@@ -518,7 +518,7 @@ export class CortexDebugExtension {
         this.performanceProvider.refresh();
     }
 
-    private async performanceClearValue(node: PerformanceCounterNode): Promise<void> {
+    private async performanceClearValue(node: PerformanceCycleCounterNode): Promise<void> {
         await this.performanceProvider.clearValue(node);
         this.performanceProvider.refresh();
     }
