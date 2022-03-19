@@ -4,7 +4,7 @@ import * as path from 'path';
 
 import { PeripheralTreeProvider } from './views/peripheral';
 import { RegisterTreeProvider } from './views/registers';
-import { BaseNode, PeripheralBaseNode } from './views/nodes/basenode';
+import { BaseNode, PerformanceBaseNode, PeripheralBaseNode } from './views/nodes/basenode';
 
 import { RTTCore, SWOCore } from './swo/core';
 import { NumberFormat, ConfigurationArguments,
@@ -25,7 +25,6 @@ import { GDBServerConsole } from './server_console';
 import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session';
 import { ServerConsoleLog } from '../backend/server';
 import { PerformanceTreeProvider } from './views/performance';
-import { PerformanceCycleCounterNode } from './views/nodes/performancecyclecounternode';
 import { RTOSTracker } from './rtos/rtos';
 
 const commandExistsSync = require('command-exists').sync;
@@ -519,7 +518,7 @@ export class CortexDebugExtension {
         this.performanceProvider.refresh();
     }
 
-    private async performanceClearValue(node: PerformanceCycleCounterNode): Promise<void> {
+    private async performanceClearValue(node: PerformanceBaseNode): Promise<void> {
         await this.performanceProvider.clearValue(node);
         this.performanceProvider.refresh();
     }

@@ -1,24 +1,21 @@
 import { TreeItem, DebugSession, debug } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
-import { PerformanceBaseNode } from './basenode';
+import { BaseNode, PerformanceBaseNode } from './basenode';
 
-export class PerformanceCycleCounterNode extends PerformanceBaseNode {
+export class PerformanceCounterNode extends PerformanceBaseNode {
     private currentCount: number;
-    private memoryReadAddressRange: AddrRange[];
 
     constructor(private session: DebugSession, private label: string, private baseAddress: number) {
         super();
 
         this.currentCount = 0;
-        // Read 4 bytes.
-        this.memoryReadAddressRange = [new AddrRange(baseAddress, 4)];
     }
 
     /**
      * Returns the children of the performance cycle counter.
      */
-    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
+    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
         return [];
     }
 
@@ -46,7 +43,12 @@ export class PerformanceCycleCounterNode extends PerformanceBaseNode {
      */
     public async updateData(): Promise<void> {
         const memReadResult: number[] = [];
-        await MemReadUtils.readMemoryChunks(this.session, this.baseAddress, this.memoryReadAddressRange, memReadResult);
+        await MemReadUtils.readMemoryChunks(
+            this.session,
+            this.baseAddress,
+            [new AddrRange(this.baseAddress, 4)],
+            memReadResult
+        );
 
         const memReadResultBytes = new Uint8Array(memReadResult);
         const buffer = Buffer.from(memReadResultBytes);

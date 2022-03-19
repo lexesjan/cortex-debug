@@ -1,11 +1,10 @@
-import { performance } from 'perf_hooks';
 import { TreeItem, TreeItemCollapsibleState } from 'vscode';
-import { PerformanceBaseNode } from './basenode';
+import { BaseNode, PerformanceBaseNode } from './basenode';
 
-export class PerformanceNode extends PerformanceBaseNode {
+export class PerformanceCountersNode extends PerformanceBaseNode {
     public myTreeItem: TreeItem;
 
-    constructor(private label: string, private children: PerformanceBaseNode[]) {
+    constructor(private label: string, protected children: PerformanceBaseNode[]) {
         super();
 
         this.myTreeItem = new TreeItem(this.label, TreeItemCollapsibleState.Collapsed);
@@ -13,14 +12,14 @@ export class PerformanceNode extends PerformanceBaseNode {
     }
 
     /**
-     * Returns the children of the performance node.
+     * Returns the children of the performance counter node.
      */
-    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
+    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
         return this.children;
     }
 
     /**
-     * Returns the display element of the performance node.
+     * Returns the display element of the performance counter node.
      */
     public getTreeItem(): TreeItem | Promise<TreeItem> {
         return this.myTreeItem;

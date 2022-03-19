@@ -9,12 +9,7 @@ import {
 } from 'vscode';
 import { BaseNode, PerformanceBaseNode } from './nodes/basenode';
 import { MessageNode } from './nodes/messagenode';
-import { PerformanceCycleCounterNode } from './nodes/performancecyclecounternode';
-import { PerformanceNode } from './nodes/performancenode';
-
-// DWT register addresses.
-const DWT_CYCCNT = 0xe0001004;
-const DWT_LSUCNT = 0xe0001014;
+import { PerformanceCycleCountersNode } from './nodes/performancecyclecountersnode';
 
 /**
  * Per session performance info tab.
@@ -55,13 +50,7 @@ export class PerformanceTreeForSession extends PerformanceBaseNode {
      * Initialise the performance counter tabs on startup.
      */
     public debugSessionStarted(): void {
-        // Initialise cycle counter nodes.
-        const performanceCycleCounterNodes = [
-            new PerformanceCycleCounterNode(this.session, 'Total count', DWT_CYCCNT),
-            new PerformanceCycleCounterNode(this.session, 'Load / store count', DWT_LSUCNT),
-        ];
-        const performanceCycleNode = new PerformanceNode('Cycle counters', performanceCycleCounterNodes);
-        this.performanceNodes.push(performanceCycleNode);
+        this.performanceNodes.push(new PerformanceCycleCountersNode(this.session));
     }
 
     /**
