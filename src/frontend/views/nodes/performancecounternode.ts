@@ -39,6 +39,13 @@ export class PerformanceCounterNode extends PerformanceBaseNode {
     }
 
     /**
+     * Returns the current count.
+     */
+    public getCurrentCount(): number {
+        return this.currentCount;
+    }
+
+    /**
      * Reads the current count in memory.
      */
     public async updateData(): Promise<void> {
@@ -60,6 +67,10 @@ export class PerformanceCounterNode extends PerformanceBaseNode {
      * Applies the reset value to the performance cycle counter.
      */
     public async clearValue(): Promise<void> {
+        if (this.currentCount === 0) {
+            return;
+        }
+
         this.currentCount = 0;
         return debug.activeDebugSession.customRequest('write-memory', { address: this.baseAddress, data: '00000000' });
     }

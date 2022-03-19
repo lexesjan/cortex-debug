@@ -10,6 +10,7 @@ import {
 import { BaseNode, PerformanceBaseNode } from './nodes/basenode';
 import { MessageNode } from './nodes/messagenode';
 import { PerformanceCycleCountersNode } from './nodes/performancecyclecountersnode';
+import { PerformanceInstructionCountersNode } from './nodes/performanceinstructioncountersnode';
 
 /**
  * Per session performance info tab.
@@ -51,6 +52,7 @@ export class PerformanceTreeForSession extends PerformanceBaseNode {
      */
     public debugSessionStarted(): void {
         this.performanceNodes.push(new PerformanceCycleCountersNode(this.session));
+        this.performanceNodes.push(new PerformanceInstructionCountersNode(this.session));
     }
 
     /**
