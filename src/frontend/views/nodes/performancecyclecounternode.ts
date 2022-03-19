@@ -16,14 +16,14 @@ export class PerformanceCycleCounterNode extends BaseNode {
     }
 
     /**
-     * Returns the children of the performance counter.
+     * Returns the children of the performance cycle counter.
      */
     public getChildren(): BaseNode[] | Promise<BaseNode[]> {
         return [];
     }
 
     /**
-     * Returns the display element of the performance counter.
+     * Returns the display element of the performance cycle counter.
      */
     public getTreeItem(): TreeItem | Promise<TreeItem> {
         const label = `${this.label}: ${this.currentCount}`;
@@ -35,7 +35,7 @@ export class PerformanceCycleCounterNode extends BaseNode {
     }
 
     /**
-     * Used when clicking the value button.
+     * Used when clicking the copy value button.
      */
     public getCopyValue(): string | undefined {
         return undefined;
@@ -55,7 +55,7 @@ export class PerformanceCycleCounterNode extends BaseNode {
     }
 
     /**
-     * Applies the reset value to the performance counter.
+     * Applies the reset value to the performance cycle counter.
      */
     public async clearValue(): Promise<void> {
         this.currentCount = 0;
