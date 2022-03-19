@@ -26,6 +26,7 @@ import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session'
 import { ServerConsoleLog } from '../backend/server';
 import { PerformanceTreeProvider } from './views/performance';
 import { PerformanceCounterNode } from './views/nodes/performancecounternode';
+import { RTOSTracker } from './rtos/rtos';
 
 const commandExistsSync = require('command-exists').sync;
 interface SVDInfo {
@@ -57,6 +58,8 @@ export class CortexDebugExtension {
         this.registerProvider = new RegisterTreeProvider();
         this.memoryProvider = new MemoryContentProvider();
         this.performanceProvider = new PerformanceTreeProvider();
+
+        // const rtosTracker = new RTOSTracker(context); // You must also enable it in package.json "views"/"cortex-debug"/"when"
 
         let tmp = [];
         try {

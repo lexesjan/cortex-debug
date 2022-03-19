@@ -208,6 +208,7 @@ export class GDBDebugSession extends DebugSession {
         response.body.supportsDisassembleRequest = true;
         response.body.supportsSteppingGranularity = true;
         response.body.supportsInstructionBreakpoints = true;
+        response.body.supportsReadMemoryRequest = true;
         this.sendResponse(response);
     }
 
@@ -940,6 +941,31 @@ export class GDBDebugSession extends DebugSession {
         this.disassember.disassembleProtocolRequest(response, args, request);
     }
 
+    protected readMemoryRequest(response: DebugProtocol.ReadMemoryResponse, args: DebugProtocol.ReadMemoryArguments, request?: DebugProtocol.Request): void {
+        const startAddress = args.memoryReference;
+        const length = args.count;
+        const offset = args.offset ? `-o ${args.offset}` : '';
+        const command = `data-read-memory-bytes ${offset} "${startAddress}" ${length}`;
+        this.miDebugger.sendCommand(command).then((node) => {
+            const results = parseReadMemResults(node);
+            const numBytes = results.data.length / 2;
+            const intAry = new Uint8Array(numBytes);
+            for (let ix = 0; ix < numBytes; ix++) {
+                intAry[ix] = parseInt(results.data.substring(ix * 2, 2), 16);
+            }
+            const buf = Buffer.from(intAry);
+            const b64Data = buf.toString('base64');
+            response.body = {
+                address: results.startAddress,
+                data: b64Data
+            };
+            this.sendResponse(response);
+        }, (error) => {
+            this.sendErrorResponse(response, 114, `Read memory error: ${error.toString()}`);
+            this.sendEvent(new TelemetryEvent('Error', 'Reading Memory', command));
+        });
+    }
+
     protected readMemoryRequestCustom(response: DebugProtocol.Response, startAddress: string, length: number) {
         this.miDebugger.sendCommand(`data-read-memory-bytes "${startAddress}" ${length}`).then((node) => {
             const results = parseReadMemResults(node);
@@ -1198,10 +1224,12 @@ export class GDBDebugSession extends DebugSession {
 
             this.miDebugger.restart(commands).then((done) => {
                 if (this.args.chainedConfigurations && this.args.chainedConfigurations.enabled) {
-                    this.serverConsoleLog(`Begin ${mode} children`);
-                    this.sendEvent(new GenericCustomEvent(`session-${mode}`, args));
+                    setTimeout(() => {      // Maybe this delay should be handled in the front-end
+                        this.serverConsoleLog(`Begin ${mode} children`);
+                        this.sendEvent(new GenericCustomEvent(`session-${mode}`, args));
+                    }, 250);
                 }
-    
+
                 this.sendResponse(response);
                 this.finishStartSequence(mode);
             }, (msg) => {
@@ -1462,8 +1490,12 @@ export class GDBDebugSession extends DebugSession {
             // In case GDB quit because of normal processing, let that process finish. Wait for,\
             // a disconnect response to be sent before we send a TerminatedEvent();. Note that we could
             // also be here because the server crashed/quit on us before gdb-did
-            this.serverConsoleLog('quitEvent: sending VSCode TerminatedEvent');
-            this.sendEvent(new TerminatedEvent());
+            try {
+                this.sendEvent(new TerminatedEvent());
+                this.serverConsoleLog('quitEvent: sending VSCode TerminatedEvent');
+            }
+            catch (e) {
+            }
         }, 10);
     }
 
@@ -2186,9 +2218,8 @@ export class GDBDebugSession extends DebugSession {
         try {
             const [threadId, frameId] = GDBDebugSession.decodeReference(args.variablesReference);
             const fmt = this.args.variableUseNaturalFormat ? 'N' : 'x';
-            // --thread --frame does not work properly
-            this.miDebugger.sendCommand(`thread-select ${threadId}`);
-            this.miDebugger.sendCommand(`stack-select-frame ${frameId}`);
+            // --thread --frame does not work properly when combined with -data-list-register-values
+            this.miDebugger.sendCommand(`stack-select-frame --thread ${threadId} ${frameId}`);
             const node = await this.miDebugger.sendCommand(`data-list-register-values ${fmt}`);
             if (node.resultRecords.resultClass === 'done') {
                 const rv = node.resultRecords.results[0][1];
@@ -2438,6 +2469,7 @@ export class GDBDebugSession extends DebugSession {
         const variables: DebugProtocol.Variable[] = [];
         let stack: Variable[];
         try {
+            this.miDebugger.sendCommand(`stack-select-frame --thread ${threadId} ${frameId}`);
             stack = await this.miDebugger.getStackVariables(threadId, frameId);
             for (const variable of stack) {
                 try {
@@ -2450,7 +2482,7 @@ export class GDBDebugSession extends DebugSession {
                             const name = MINode.valueOf(change, 'name');
                             const vId = this.variableHandlesReverse[name];
                             const v = this.variableHandles.get(vId) as any;
-                            v.applyChanges(change);
+                            v.applyChanges(change/*, variable.valueStr*/);
                         });
                         const varId = this.variableHandlesReverse[varObjName];
                         varObj = this.variableHandles.get(varId) as any;
@@ -2458,7 +2490,7 @@ export class GDBDebugSession extends DebugSession {
                     catch (err) {
                         if (err instanceof MIError && err.message === 'Variable object not found') {
                             // Create variable in current frame/thread context. Matters when we have to set the variable */
-                            varObj = await this.miDebugger.varCreate(args.variablesReference, variable.name, varObjName, '*');
+                            varObj = await this.miDebugger.varCreate(args.variablesReference, variable.name, varObjName, '*', threadId, frameId);
                             const varId = this.findOrCreateVariable(varObj);
                             varObj.exp = variable.name;
                             varObj.id = varId;
@@ -2797,7 +2829,30 @@ export class GDBDebugSession extends DebugSession {
         return ret;
     }
 
-    protected async evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): Promise<void> {
+    private evaluateQueue = [];
+    private evaluateQueueBusy = false;
+    protected evaluateRequest(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): Promise<void> {
+        // We queue these requests as there can be a flood of them. Especially if you have two variables or same name back to back
+        // the second can fail because we are still in the process of creating that variable (update, fail, then create). Sources
+        // for requests are from RTOS viewers, watch windows and hover. Even a watch window can have duplicates.
+        return new Promise(async (resolve, reject) => {
+            this.evaluateQueue.push({response: response, args: args, resolve: resolve, reject: reject});
+            while (!this.evaluateQueueBusy && (this.evaluateQueue.length > 0)) {
+                this.evaluateQueueBusy = true;
+                const obj = this.evaluateQueue.pop();
+                try {
+                    await this.evaluateRequestOne(obj.response, obj.args);
+                    obj.resolve();
+                }
+                catch (e) {
+                    obj.reject(e);
+                }
+                this.evaluateQueueBusy = false;
+            }
+        });
+    }
+
+    protected async evaluateRequestOne(response: DebugProtocol.EvaluateResponse, args: DebugProtocol.EvaluateArguments): Promise<void> {
         const createVariable = (arg, options?) => {
             if (options) {
                 return this.variableHandles.create(new ExtendedVariable(arg, options));
@@ -2833,13 +2888,13 @@ export class GDBDebugSession extends DebugSession {
             this.handleMsg('log', `Thread Warning: ${args.context}: eval. expression '${args.expression}' with no thread context. Using default\n`);
         }
 
-        if (args.context === 'watch') {
+        if ((args.context === 'watch') || (args.context === 'hover')) {
             try {
                 const exp = args.expression;
                 const hasher = crypto.createHash('sha256');
                 hasher.update(exp);
                 const watchName = hasher.digest('hex');
-                const varObjName = `watch_${watchName}`;
+                const varObjName = `${args.context}_${watchName}`;
                 let varObj: VariableObject;
                 try {
                     const changes = await this.miDebugger.varUpdate(varObjName, threadId, frameId);
@@ -2852,10 +2907,6 @@ export class GDBDebugSession extends DebugSession {
                     });
                     const varId = this.variableHandlesReverse[varObjName];
                     varObj = this.variableHandles.get(varId) as any;
-                    response.body = {
-                        result: varObj.value,
-                        variablesReference: varObj.id
-                    };
                 }
                 catch (err) {
                     if (err instanceof MIError && err.message === 'Variable object not found') {
@@ -2863,31 +2914,37 @@ export class GDBDebugSession extends DebugSession {
                         const varId = findOrCreateVariable(varObj);
                         varObj.exp = exp;
                         varObj.id = varId;
-                        response.body = {
-                            result: varObj.value,
-                            variablesReference: varObj.id
-                        };
                     }
                     else {
                         throw err;
                     }
                 }
 
+                response.body = {
+                    result: varObj.value,
+                    type: varObj.type,
+                    presentationHint: {
+                        kind: varObj.displayhint
+                    },
+                    variablesReference: varObj.id
+                };
                 this.sendResponse(response);
             }
             catch (err) {
                 response.body = {
-                    result: `<${err.toString()}>`,
+                    result: (args.context === 'hover') ? null : `<${err.toString()}>`,
                     variablesReference: 0
                 };
                 this.sendResponse(response);
                 if (this.args.showDevDebugOutput) {
-                    this.handleMsg('stderr', 'watch: ' + err.toString());
+                    this.handleMsg('stderr', args.context + ' ' + err.toString());
                 }
                 // this.sendErrorResponse(response, 7, err.toString());
             }
         }
         else if (args.context === 'hover') {
+            // No longer used. We treat hover and watch same now. This allows clients to variable references
+            // and using those, they further expand arrays/objects
             try {
                 const res = await this.miDebugger.evalExpression(args.expression, threadId, frameId);
                 response.body = {
@@ -2912,8 +2969,7 @@ export class GDBDebugSession extends DebugSession {
         else {
             // REPL: Set the proper thread/frame context before sending command to gdb. We don't know
             // what the command is but it needs to be run in the proper context.
-            this.miDebugger.sendCommand(`thread-select ${threadId}`);
-            this.miDebugger.sendCommand(`stack-select-frame ${frameId}`);
+            this.miDebugger.sendCommand(`stack-select-frame --thread ${threadId} ${frameId}`);
             this.miDebugger.sendUserInput(args.expression).then((output) => {
                 if (typeof output === 'undefined') {
                     response.body = {

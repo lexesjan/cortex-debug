@@ -331,11 +331,14 @@ export class MI2 extends EventEmitter implements IBackend {
                             else if (record.type === 'notify') {
                                 let tid: undefined | string;
                                 let gid: undefined | string;
+                                let fid: undefined | string;
                                 for (const item of record.output) {
                                     if (item[0] === 'id') {
                                         tid = item[1];
                                     } else if (item[0] === 'group-id') {
                                         gid = item[1];
+                                    } else if (item[0] === 'frame') {
+                                        fid = item[1];  // for future use, available for thread-selected
                                     }
                                 }
                                 if (record.asyncClass === 'thread-created') {
@@ -345,7 +348,7 @@ export class MI2 extends EventEmitter implements IBackend {
                                     this.emit('thread-exited', { threadId: parseInt(tid), threadGroupId: gid });
                                 }
                                 else if (record.asyncClass === 'thread-selected') {
-                                    this.emit('thread-selected', { threadId: parseInt(tid) });
+                                    this.emit('thread-selected', { threadId: parseInt(tid), frameId: fid });
                                 }
                                 else if (record.asyncClass === 'thread-group-exited') {
                                     this.emit('thread-group-exited', { threadGroupId: tid });
@@ -829,7 +832,9 @@ export class MI2 extends EventEmitter implements IBackend {
         x: 'hexadecimal'
     };
 
-    public async varCreate(parent: number, expression: string, name: string = '-', scope: string = '@'): Promise<VariableObject> {
+    public async varCreate(
+        parent: number, expression: string, name: string = '-', scope: string = '@',
+        threadId?: number, frameId?: number): Promise<VariableObject> {
         if (trace) {
             this.log('stderr', 'varCreate');
         }
@@ -841,7 +846,8 @@ export class MI2 extends EventEmitter implements IBackend {
         }
         expression = expression.replace(/"/g, '\\"');
 
-        const createResp = await this.sendCommand(`var-create ${name} ${scope} "${expression}"`);
+        const thFr = ((scope === '*') && (threadId !== undefined) && (frameId !== undefined)) ? `--thread ${threadId} --frame ${frameId}` : '';
+        const createResp = await this.sendCommand(`var-create ${thFr} ${name} ${scope} "${expression}"`);
         let overrideVal = null;
         if (fmt && name !== '-') {
             const formatResp = await this.sendCommand(`var-set-format ${name} ${MI2.FORMAT_SPEC_MAP[fmt]}`);
