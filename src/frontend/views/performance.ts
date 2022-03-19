@@ -7,9 +7,10 @@ import {
     DebugSession,
     TreeItemCollapsibleState,
 } from 'vscode';
-import { BaseNode } from './nodes/basenode';
+import { BaseNode, PerformanceBaseNode } from './nodes/basenode';
 import { MessageNode } from './nodes/messagenode';
 import { PerformanceCycleCounterNode } from './nodes/performancecyclecounternode';
+import { PerformanceNode } from './nodes/performancenode';
 
 // DWT register addresses.
 const DWT_CYCCNT = 0xe0001004;
@@ -18,32 +19,29 @@ const DWT_LSUCNT = 0xe0001014;
 /**
  * Per session performance info tab.
  */
-export class PerformanceTreeForSession extends BaseNode {
+export class PerformanceTreeForSession extends PerformanceBaseNode {
     public myTreeItem: TreeItem;
-    public performanceCounterNodes: PerformanceCycleCounterNode[];
+    public performanceNodes: PerformanceBaseNode[];
 
-    constructor(public session: DebugSession, public state: TreeItemCollapsibleState) {
+    constructor(private session: DebugSession, public state: TreeItemCollapsibleState) {
         super();
 
         this.myTreeItem = new TreeItem(session.id, state);
-        this.performanceCounterNodes = [];
+        this.performanceNodes = [];
     }
 
     /**
      * Returns the children of the session performance info tab.
      */
     public getChildren(): BaseNode[] | Promise<BaseNode[]> {
-        return this.performanceCounterNodes;
+        return this.performanceNodes;
     }
 
     /**
-     * Returns the tree item from the currently selected element or this
-     * element's tree item.
-     *
-     * @param element Element selected.
+     * Returns this element's tree item.
      */
-    public getTreeItem(element?: BaseNode): TreeItem | Promise<TreeItem> {
-        return element ? element.getTreeItem() : this.myTreeItem;
+    public getTreeItem(): TreeItem | Promise<TreeItem> {
+        return this.myTreeItem;
     }
 
     /**
@@ -57,15 +55,27 @@ export class PerformanceTreeForSession extends BaseNode {
      * Initialise the performance counter tabs on startup.
      */
     public debugSessionStarted(): void {
-        this.performanceCounterNodes.push(new PerformanceCycleCounterNode(this.session, 'Cycle count', DWT_CYCCNT));
-        this.performanceCounterNodes.push(new PerformanceCycleCounterNode(this.session, 'Load / store count', DWT_LSUCNT));
+        // Initialise cycle counter nodes.
+        const performanceCycleCounterNodes = [
+            new PerformanceCycleCounterNode(this.session, 'Total count', DWT_CYCCNT),
+            new PerformanceCycleCounterNode(this.session, 'Load / store count', DWT_LSUCNT),
+        ];
+        const performanceCycleNode = new PerformanceNode('Cycle counters', performanceCycleCounterNodes);
+        this.performanceNodes.push(performanceCycleNode);
     }
 
     /**
      * Update each performance counter data.
      */
     public async updateData(): Promise<void> {
-        await Promise.all(this.performanceCounterNodes.map((performanceNode) => performanceNode.updateData()));
+        await Promise.all(this.performanceNodes.map((performanceNode) => performanceNode.updateData()));
+    }
+
+    /**
+     * Clears each performance counter values.
+     */
+    public async clearValue(): Promise<void> {
+        await Promise.all(this.performanceNodes.map((performanceNode) => performanceNode.clearValue()));
     }
 }
 
@@ -101,7 +111,7 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
      *
      * @param element Element selected.
      */
-    public getTreeItem(element: BaseNode): TreeItem | Promise<TreeItem> {
+    public getTreeItem(element: PerformanceBaseNode): TreeItem | Promise<TreeItem> {
         return element.getTreeItem();
     }
 
@@ -115,7 +125,7 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
         if (element) {
             return element.getChildren();
         } else if (values.length === 0) {
-            return [new MessageNode('No debug sessions detected or DWT not present')];
+            return [new MessageNode('No debug sessions detected')];
         } else if (values.length === 1) {
             return values[0].getChildren(); // Don't do root nodes at top-level if there is only one root.
         } else {
@@ -174,7 +184,7 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
     /**
      * Clears the value of the counter.
      */
-    public async clearValue(node: PerformanceCycleCounterNode): Promise<void> {
+    public async clearValue(node: PerformanceBaseNode): Promise<void> {
         node.clearValue();
     }
 }

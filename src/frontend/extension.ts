@@ -108,6 +108,7 @@ export class CortexDebugExtension {
 
             vscode.commands.registerCommand('cortex-debug.performance.forceRefresh', this.performanceForceRefresh.bind(this)),
             vscode.commands.registerCommand('cortex-debug.performance.clearValue', this.performanceClearValue.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.performance.clearValues', this.performanceClearValue.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.examineMemory', this.examineMemory.bind(this)),
             vscode.commands.registerCommand('cortex-debug.viewDisassembly', this.showDisassembly.bind(this)),

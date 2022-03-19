@@ -472,6 +472,11 @@
             {
                 "command": "cortex-debug.performance.clearValue",
                 "title": "Clear Value",
+                "icon": "$(close)"
+            },
+            {
+                "command": "cortex-debug.performance.clearValues",
+                "title": "Clear Values",
                 "icon": "$(clear-all)"
             },
             {
@@ -2660,6 +2665,10 @@
                     "when": "false"
                 },
                 {
+                    "command": "cortex-debug.performance.clearValues",
+                    "when": "false"
+                },
+                {
                     "command": "cortex-debug.peripherals.pin",
                     "when": "false"
                 },
@@ -2778,6 +2787,11 @@
                 {
                     "command": "cortex-debug.performance.clearValue",
                     "when": "view == cortex-debug.performance && viewItem == counter",
+                    "group": "inline"
+                },
+                {
+                    "command": "cortex-debug.performance.clearValues",
+                    "when": "view == cortex-debug.performance && viewItem == counters",
                     "group": "inline"
                 }
             ],

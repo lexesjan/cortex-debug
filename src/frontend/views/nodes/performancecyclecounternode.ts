@@ -1,9 +1,9 @@
 import { TreeItem, DebugSession, debug } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
-import { BaseNode } from './basenode';
+import { PerformanceBaseNode } from './basenode';
 
-export class PerformanceCycleCounterNode extends BaseNode {
+export class PerformanceCycleCounterNode extends PerformanceBaseNode {
     private currentCount: number;
     private memoryReadAddressRange: AddrRange[];
 
@@ -18,7 +18,7 @@ export class PerformanceCycleCounterNode extends BaseNode {
     /**
      * Returns the children of the performance cycle counter.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         return [];
     }
 
