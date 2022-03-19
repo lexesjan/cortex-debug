@@ -29,7 +29,7 @@ export class PerformanceTreeForSession extends PerformanceBaseNode {
     /**
      * Returns the children of the session performance info tab.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         return this.performanceNodes;
     }
 
@@ -73,10 +73,12 @@ export class PerformanceTreeForSession extends PerformanceBaseNode {
 /**
  * Root performance information tab.
  */
-export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
+export class PerformanceTreeProvider implements TreeDataProvider<PerformanceBaseNode> {
     // tslint:disable-next-line:variable-name
-    public _onDidChangeTreeData: EventEmitter<BaseNode | undefined> = new EventEmitter<BaseNode | undefined>();
-    public readonly onDidChangeTreeData: Event<BaseNode | undefined> = this._onDidChangeTreeData.event;
+    public _onDidChangeTreeData: EventEmitter<PerformanceBaseNode | undefined> = new EventEmitter<
+        PerformanceBaseNode | undefined
+    >();
+    public readonly onDidChangeTreeData: Event<PerformanceBaseNode | undefined> = this._onDidChangeTreeData.event;
     protected sessionPerformanceInfoMap = new Map<string, PerformanceTreeForSession>();
 
     /**
@@ -111,12 +113,12 @@ export class PerformanceTreeProvider implements TreeDataProvider<BaseNode> {
      *
      * @param element Element selected.
      */
-    public getChildren(element?: BaseNode): ProviderResult<BaseNode[]> {
+    public getChildren(element?: PerformanceBaseNode): ProviderResult<PerformanceBaseNode[]> {
         const values = Array.from(this.sessionPerformanceInfoMap.values());
         if (element) {
             return element.getChildren();
         } else if (values.length === 0) {
-            return [new MessageNode('No debug sessions detected')];
+            return [new MessageNode('No debug sessions detected') as unknown as PerformanceBaseNode];
         } else if (values.length === 1) {
             return values[0].getChildren(); // Don't do root nodes at top-level if there is only one root.
         } else {

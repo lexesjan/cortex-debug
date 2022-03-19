@@ -1,7 +1,7 @@
 import { DebugSession } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
-import { BaseNode } from './basenode';
+import { PerformanceBaseNode } from './basenode';
 import { MessageNode } from './messagenode';
 import { PerformanceCounterNode } from './performancecounternode';
 import { PerformanceCountersNode } from './performancecountersnode';
@@ -148,7 +148,7 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
     /**
      * Returns the performance counter nodes if the DWT is present.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         // Use nested function to use async function with a Thenable return type.
         return (async () => {
             const memReadResult: number[] = [];
@@ -159,7 +159,7 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
             const control = buffer.readInt32LE(0);
 
             if (!control) {
-                return [new MessageNode('No instruction counter present')];
+                return [new MessageNode('No instruction counter present') as unknown as PerformanceBaseNode];
             }
 
             const totalCount = this.children.reduce(
@@ -173,7 +173,10 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
                 (performanceNode) => (performanceNode as PerformanceInstructionGroupNode).getTotalCount() !== 0
             );
 
-            return [...filteredChildren, new MessageNode(`Total count: ${totalCount}`)];
+            return [
+                ...filteredChildren,
+                new MessageNode(`Total count: ${totalCount}`) as unknown as PerformanceBaseNode,
+            ];
         })();
     }
 }

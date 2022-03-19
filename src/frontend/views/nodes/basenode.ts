@@ -52,6 +52,7 @@ export abstract class PeripheralBaseNode extends BaseNode {
 }
 
 export abstract class PerformanceBaseNode extends BaseNode {
+    public abstract getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]>;
     public abstract updateData(): Promise<void>;
     public abstract clearValue(): Promise<void>;
 }

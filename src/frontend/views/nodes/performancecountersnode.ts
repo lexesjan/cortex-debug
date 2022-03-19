@@ -7,14 +7,17 @@ export class PerformanceCountersNode extends PerformanceBaseNode {
     constructor(private label: string, protected children: PerformanceBaseNode[]) {
         super();
 
-        this.myTreeItem = new TreeItem(this.label, TreeItemCollapsibleState.Collapsed);
+        this.myTreeItem = new TreeItem(
+            this.label,
+            this.expanded ? TreeItemCollapsibleState.Expanded : TreeItemCollapsibleState.Collapsed
+        );
         this.myTreeItem.contextValue = 'counters';
     }
 
     /**
      * Returns the children of the performance counter node.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         return this.children;
     }
 
@@ -36,6 +39,10 @@ export class PerformanceCountersNode extends PerformanceBaseNode {
      * Update each performance counter data.
      */
     public async updateData(): Promise<void> {
+        if (!this.expanded) {
+            return;
+        }
+
         await Promise.all(this.children.map((performanceNode) => performanceNode.updateData()));
     }
 

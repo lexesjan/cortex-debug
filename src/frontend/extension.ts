@@ -45,7 +45,7 @@ export class CortexDebugExtension {
 
     private peripheralTreeView: vscode.TreeView<PeripheralBaseNode>;
     private registerTreeView: vscode.TreeView<BaseNode>;
-    private performanceTreeView: vscode.TreeView<BaseNode>;
+    private performanceTreeView: vscode.TreeView<PerformanceBaseNode>;
 
     private SVDDirectory: SVDInfo[] = [];
     private functionSymbols: SymbolInformation[] = null;
@@ -146,7 +146,15 @@ export class CortexDebugExtension {
                 e.element.expanded = false;
             }),
 
-            this.performanceTreeView
+            this.performanceTreeView,
+            this.performanceTreeView.onDidExpandElement((e) => {
+                e.element.expanded = true;
+                e.element.updateData();
+                this.performanceProvider.refresh();
+            }),
+            this.performanceTreeView.onDidCollapseElement((e) => {
+                e.element.expanded = false;
+            }),
         );
     }
 

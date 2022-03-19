@@ -1,7 +1,7 @@
 import { DebugSession } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
-import { BaseNode } from './basenode';
+import { PerformanceBaseNode } from './basenode';
 import { MessageNode } from './messagenode';
 import { PerformanceCounterNode } from './performancecounternode';
 import { PerformanceCountersNode } from './performancecountersnode';
@@ -22,7 +22,7 @@ export class PerformanceCycleCountersNode extends PerformanceCountersNode {
     /**
      * Returns the performance counter nodes if the DWT is present.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         // Use nested function to use async function with a Thenable return type.
         return (async () => {
             const memReadResult: number[] = [];
@@ -33,7 +33,7 @@ export class PerformanceCycleCountersNode extends PerformanceCountersNode {
             const control = buffer.readInt32LE(0);
 
             if (!control) {
-                return [new MessageNode('No DWT present')];
+                return [new MessageNode('No DWT present') as unknown as PerformanceBaseNode];
             }
 
             return this.children;

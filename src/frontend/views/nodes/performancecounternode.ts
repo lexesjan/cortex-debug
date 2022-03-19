@@ -15,7 +15,7 @@ export class PerformanceCounterNode extends PerformanceBaseNode {
     /**
      * Returns the children of the performance cycle counter.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         return [];
     }
 

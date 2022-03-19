@@ -3,19 +3,14 @@ import { BaseNode, PerformanceBaseNode } from './basenode';
 import { PerformanceCounterNode } from './performancecounternode';
 
 export class PerformanceInstructionGroupNode extends PerformanceBaseNode {
-    public myTreeItem: TreeItem;
-
     constructor(private label: string, protected children: PerformanceCounterNode[]) {
         super();
-
-        this.myTreeItem = new TreeItem(this.label, TreeItemCollapsibleState.Collapsed);
-        this.myTreeItem.contextValue = 'counters';
     }
 
     /**
      * Returns the children of the performance instruction group node.
      */
-    public getChildren(): BaseNode[] | Promise<BaseNode[]> {
+    public getChildren(): PerformanceBaseNode[] | Promise<PerformanceBaseNode[]> {
         // Remove instruction groups with no counts.
         const filteredChildren = this.children.filter((performanceNode) => performanceNode.getCurrentCount() !== 0);
 
@@ -26,9 +21,14 @@ export class PerformanceInstructionGroupNode extends PerformanceBaseNode {
      * Returns the display element of the performance instruction group node.
      */
     public getTreeItem(): TreeItem | Promise<TreeItem> {
-        this.myTreeItem.label = `${this.label}: ${this.getTotalCount()}`;
+        const item = new TreeItem(
+            this.label,
+            this.expanded ? TreeItemCollapsibleState.Expanded : TreeItemCollapsibleState.Collapsed
+        );
+        item.label = `${this.label}: ${this.getTotalCount()}`;
+        item.contextValue = 'counters';
 
-        return this.myTreeItem;
+        return item;
     }
 
     /**
