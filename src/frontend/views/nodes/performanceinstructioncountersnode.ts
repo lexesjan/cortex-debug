@@ -1,4 +1,4 @@
-import { DebugSession } from 'vscode';
+import { DebugSession, TreeItemLabel } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
 import { PerformanceBaseNode } from './basenode';
@@ -79,6 +79,8 @@ const IC_BX = 0xe00030a0;
 const IC_B = 0xe00030a4;
 
 export class PerformanceInstructionCountersNode extends PerformanceCountersNode {
+    private previousTotalCount: number;
+
     constructor(private session: DebugSession) {
         super('Instruction counters', [
             new PerformanceInstructionGroupNode('Move', [new PerformanceCounterNode(session, 'MOV', IC_MOV)]),
@@ -143,6 +145,8 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
                 new PerformanceCounterNode(session, 'RRX', IC_RRX),
             ]),
         ]);
+
+        this.previousTotalCount = 0;
     }
 
     /**
@@ -168,15 +172,20 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
                 0
             );
 
+            // Highlight total count on change.
+            const label: TreeItemLabel = { label: `Total count: ${totalCount}` };
+            if (this.previousTotalCount !== totalCount) {
+                label.highlights = [[label.label.length - totalCount.toString().length, label.label.length]];
+            }
+
             // Remove instruction groups with no counts.
             const filteredChildren = this.children.filter(
                 (performanceNode) => (performanceNode as PerformanceInstructionGroupNode).getTotalCount() !== 0
             );
 
-            return [
-                ...filteredChildren,
-                new MessageNode(`Total count: ${totalCount}`) as unknown as PerformanceBaseNode,
-            ];
+            this.previousTotalCount = totalCount;
+
+            return [...filteredChildren, new MessageNode(label) as unknown as PerformanceBaseNode];
         })();
     }
 }

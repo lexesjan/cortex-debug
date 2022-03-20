@@ -1,15 +1,17 @@
-import { TreeItem, DebugSession, debug } from 'vscode';
+import { TreeItem, DebugSession, debug, TreeItemLabel } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { MemReadUtils } from '../../memreadutils';
 import { BaseNode, PerformanceBaseNode } from './basenode';
 
 export class PerformanceCounterNode extends PerformanceBaseNode {
     private currentCount: number;
+    private previousCount: number;
 
     constructor(private session: DebugSession, private label: string, private baseAddress: number) {
         super();
 
         this.currentCount = 0;
+        this.previousCount = 0;
     }
 
     /**
@@ -23,10 +25,16 @@ export class PerformanceCounterNode extends PerformanceBaseNode {
      * Returns the display element of the performance cycle counter.
      */
     public getTreeItem(): TreeItem | Promise<TreeItem> {
-        const label = `${this.label}: ${this.currentCount}`;
+        // Highlight counter on change.
+        const label: TreeItemLabel = { label: `${this.label}: ${this.currentCount}` };
+        if (this.previousCount !== this.currentCount) {
+            label.highlights = [[this.label.length + 2, label.label.length]];
+        }
 
         const item = new TreeItem(label);
         item.contextValue = 'counter';
+
+        this.previousCount = this.currentCount;
 
         return item;
     }

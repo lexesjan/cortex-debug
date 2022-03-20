@@ -1,11 +1,10 @@
 import { PeripheralBaseNode, BaseNode } from './basenode';
-import { TreeItem, TreeItemCollapsibleState } from 'vscode';
+import { TreeItem, TreeItemCollapsibleState, TreeItemLabel } from 'vscode';
 import { AddrRange } from '../../addrranges';
 import { NodeSetting } from '../../../common';
 
 export class MessageNode extends PeripheralBaseNode {
-    
-    constructor(public message: string, public tooltip?: string) {
+    constructor(public message: string | TreeItemLabel, public tooltip?: string) {
         super(null);
     }
 
@@ -35,8 +34,7 @@ export class MessageNode extends PeripheralBaseNode {
         return null;
     }
 
-    public collectRanges(ary: AddrRange[]): void {
-    }
+    public collectRanges(ary: AddrRange[]): void {}
 
     public saveState(path?: string): NodeSetting[] {
         return [];

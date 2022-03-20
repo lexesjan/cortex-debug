@@ -1,10 +1,14 @@
-import { TreeItem, TreeItemCollapsibleState } from 'vscode';
+import { TreeItem, TreeItemCollapsibleState, TreeItemLabel } from 'vscode';
 import { BaseNode, PerformanceBaseNode } from './basenode';
 import { PerformanceCounterNode } from './performancecounternode';
 
 export class PerformanceInstructionGroupNode extends PerformanceBaseNode {
+    private previousTotalCount: number;
+
     constructor(private label: string, protected children: PerformanceCounterNode[]) {
         super();
+
+        this.previousTotalCount = 0;
     }
 
     /**
@@ -21,12 +25,21 @@ export class PerformanceInstructionGroupNode extends PerformanceBaseNode {
      * Returns the display element of the performance instruction group node.
      */
     public getTreeItem(): TreeItem | Promise<TreeItem> {
+        const totalCount = this.getTotalCount();
+
+        // Highlight total count on change.
+        const label: TreeItemLabel = { label: `${this.label}: ${totalCount}` };
+        if (this.previousTotalCount !== totalCount) {
+            label.highlights = [[this.label.length + 2, label.label.length]];
+        }
+
         const item = new TreeItem(
-            this.label,
+            label,
             this.expanded ? TreeItemCollapsibleState.Expanded : TreeItemCollapsibleState.Collapsed
         );
-        item.label = `${this.label}: ${this.getTotalCount()}`;
         item.contextValue = 'counters';
+
+        this.previousTotalCount = totalCount;
 
         return item;
     }
