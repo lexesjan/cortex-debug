@@ -102,4 +102,11 @@ export class Heatmap {
         await this.calculate();
         this.show();
     }
+
+    /**
+     * Hide the heatmap on continue event.
+     */
+    public debugContinued(): void {
+        this.hide();
+    }
 }

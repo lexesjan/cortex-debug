@@ -871,6 +871,7 @@ export class CortexDebugExtension {
         const mySession = CDebugSession.FindSession(e.session);
         mySession.status = 'running';
         this.peripheralProvider.debugContinued();
+        this.heatmap.debugContinued();
         if (this.isDebugging(e.session)) {
             this.registerProvider.debugContinued();
         }
