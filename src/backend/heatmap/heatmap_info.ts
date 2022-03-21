@@ -77,7 +77,7 @@ export class HeatmapInfo {
         }
 
         const instructionAddress = parseHexOrDecInt(matches[1]);
-        const addressCount = this.addressCounters[instructionAddress] || 0;
+        const addressCount = this.addressCounters[instructionAddress] ?? 0;
         this.addressCounters[instructionAddress] = addressCount + 1;
     }
 
@@ -86,13 +86,10 @@ export class HeatmapInfo {
      *
      * @param data Data emitted by stdout.
      */
-    public async onStdout(data: string): Promise<void> {
-        await Promise.all(
-            data
-                .trim()
-                .split('\n')
-                .map((line) => this.parseLine(line))
-        );
+    public onStdout(data: string): void {
+        data.trim()
+            .split('\n')
+            .forEach((line) => this.parseLine(line));
     }
 
     /**

@@ -10,7 +10,7 @@ export class Heatmap {
 
     constructor() {
         this.map = {};
-        this.isShown = false;
+        this.isShown = true;
     }
 
     /**
@@ -19,8 +19,8 @@ export class Heatmap {
      * @param value Value ranging from 0 to 1.
      */
     private static calculateHeatMapColourForValue(value: number): HSL {
-        // Ensure that the colour is red at 0.5 or above.
-        const scaledValue = Math.min(value * 2, 1);
+        // Ensure that the colour is red at 0.25 or above.
+        const scaledValue = Math.min(value * 3, 1);
         const h = (1.0 - scaledValue) * 240;
         return [h, 100, 50];
     }
@@ -28,7 +28,7 @@ export class Heatmap {
     /**
      * Calculates the heatmap colours for the current file.
      */
-    public async calculate(): Promise<void> {
+    public async calculate(): Promise<boolean> {
         this.map = {};
 
         const session = CortexDebugExtension.getActiveCDSession();
@@ -39,14 +39,19 @@ export class Heatmap {
         const filename = path.basename(window.activeTextEditor.document.fileName);
         const lineCounts = (await session.customRequest('read-line-counts', { filename })) as Record<number, number>;
         if (!lineCounts) {
-            window.showErrorMessage('Failed to retrieve executed instruction counts.');
-            return;
+            window.showErrorMessage('Current open file is not being debugged!');
+            return false;
         }
 
         const lineCountPairs = Object.entries(lineCounts);
         const totalInstructionCount = lineCountPairs.reduce((acc, [_line, count]) => acc + count, 0) || 1;
 
         lineCountPairs.forEach(([line, count]) => {
+            // Skip not executed instructions.
+            if (count === 0) {
+                return;
+            }
+
             const hitPercentage = count / totalInstructionCount;
             const [h, s, l] = Heatmap.calculateHeatMapColourForValue(hitPercentage);
 
@@ -61,6 +66,8 @@ export class Heatmap {
 
             this.map[line] = decorationType;
         });
+
+        return true;
     }
 
     /**
@@ -88,7 +95,6 @@ export class Heatmap {
      * Hides the heatmap on termination.
      */
     public debugSessionTerminated(): void {
-        this.isShown = false;
         this.hide();
     }
 
