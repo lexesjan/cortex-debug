@@ -26,6 +26,7 @@ import { CDebugSession, CDebugChainedSessionItem } from './cortex_debug_session'
 import { ServerConsoleLog } from '../backend/server';
 import { PerformanceTreeProvider } from './views/performance';
 import { RTOSTracker } from './rtos/rtos';
+import { Heatmap } from './heatmap/heatmap';
 
 const commandExistsSync = require('command-exists').sync;
 interface SVDInfo {
@@ -37,6 +38,8 @@ export class CortexDebugExtension {
     private rttTerminals: RTTTerminal[] = [];
 
     private gdbServerConsole: GDBServerConsole = null;
+
+    private heatmap: Heatmap;
 
     private peripheralProvider: PeripheralTreeProvider;
     private registerProvider: RegisterTreeProvider;
@@ -59,6 +62,8 @@ export class CortexDebugExtension {
         this.performanceProvider = new PerformanceTreeProvider();
 
         // const rtosTracker = new RTOSTracker(context); // You must also enable it in package.json "views"/"cortex-debug"/"when"
+
+        this.heatmap = new Heatmap();
 
         let tmp = [];
         try {
@@ -108,6 +113,7 @@ export class CortexDebugExtension {
             vscode.commands.registerCommand('cortex-debug.performance.forceRefresh', this.performanceForceRefresh.bind(this)),
             vscode.commands.registerCommand('cortex-debug.performance.clearValue', this.performanceClearValue.bind(this)),
             vscode.commands.registerCommand('cortex-debug.performance.clearValues', this.performanceClearValue.bind(this)),
+            vscode.commands.registerCommand('cortex-debug.performance.toggleHeatmap', this.performanceToggleHeatmap.bind(this)),
 
             vscode.commands.registerCommand('cortex-debug.examineMemory', this.examineMemory.bind(this)),
             vscode.commands.registerCommand('cortex-debug.viewDisassembly', this.showDisassembly.bind(this)),
@@ -531,6 +537,18 @@ export class CortexDebugExtension {
         this.performanceProvider.refresh();
     }
 
+    private async performanceToggleHeatmap(): Promise<void> {
+        vscode.window.showErrorMessage('toggling');
+        this.heatmap.isShown = !this.heatmap.isShown;
+
+        if (this.heatmap.isShown) {
+            await this.heatmap.calculate();
+            this.heatmap.show();
+        } else {
+            this.heatmap.hide();
+        }
+    }
+
     // Settings changes
     private registersNaturalMode(newVal: any) {
         const config = vscode.workspace.getConfiguration('cortex-debug');
@@ -627,6 +645,7 @@ export class CortexDebugExtension {
             }
             this.peripheralProvider.debugSessionTerminated(session);
             this.performanceProvider.debugSessionTerminated(session);
+            this.heatmap.debugSessionTerminated();
             if (mySession?.swo) {
                 mySession.swo.debugSessionTerminated();
             }
@@ -839,6 +858,7 @@ export class CortexDebugExtension {
         mySession.status = 'stopped';
         this.peripheralProvider.debugStopped(e.session);
         this.performanceProvider.debugStopped(e.session)
+        this.heatmap.debugStopped();
         if (this.isDebugging(e.session)) {
             this.registerProvider.debugStopped(e.session);
         }

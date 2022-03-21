@@ -136,6 +136,7 @@ export class GDBServer extends EventEmitter {
 
     private onStdout(data) {
         this.sendToConsole(data);        // Send it without any processing or buffering
+        this.emit('stdout', data.toString('utf8'));
         if (this.initResolve) {
             if (typeof data === 'string') { this.outBuffer += data; }
             else { this.outBuffer += data.toString('utf8'); }

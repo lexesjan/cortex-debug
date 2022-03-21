@@ -1,0 +1,106 @@
+import { Addr2Line } from 'addr2line';
+import { parseHexOrDecInt } from '../../common';
+import { hexFormat } from '../../frontend/utils';
+
+export class HeatmapInfo {
+    private addrResolver: any;
+    private executedInstructionsCounters: Record<string, Record<number, number>>;
+    private isInitialised = false;
+
+    private executedInstructionAddressPattern = /Instruction executed: ((0[xX])?[a-fA-F0-9]+)/;
+
+    constructor(elfFilePath: string) {
+        this.addrResolver = new Addr2Line([elfFilePath], {
+            inlines: false,
+            basenames: true,
+            functions: false,
+            demangle: false,
+        });
+        this.executedInstructionsCounters = {};
+        this.isInitialised = false;
+    }
+
+    /**
+     * Initialises the valid instruction counters to zero since not every line
+     * in the source file is an instruction.
+     *
+     * @param startingInstructionAddress First executed instruction address.
+     */
+    private async initialiseCounters(startingInstructionAddress: number): Promise<void> {
+        if (this.isInitialised) {
+            return;
+        }
+
+        // Traverse backwards.
+        let address = startingInstructionAddress;
+        while (true) {
+            const result = await this.addrResolver.resolve(hexFormat(address));
+            if (result === null) {
+                break;
+            }
+
+            const counters = this.executedInstructionsCounters[result.filename] || {};
+            counters[result.line] = 0;
+            this.executedInstructionsCounters[result.filename] = counters;
+            // Arm instructions are either 2 or 4 bytes wide.
+            address -= 2;
+        }
+
+        // Traverse forwards.
+        address = startingInstructionAddress;
+        while (true) {
+            const result = await this.addrResolver.resolve(hexFormat(address));
+            if (result === null) {
+                break;
+            }
+
+            const counters = this.executedInstructionsCounters[result.filename] || {};
+            counters[result.line] = 0;
+            this.executedInstructionsCounters[result.filename] = counters;
+            // Arm instructions are either 2 or 4 bytes wide.
+            address += 2;
+        }
+
+        this.isInitialised = true;
+    }
+
+    /**
+     * Parses a stdout line and increments the counters.
+     */
+    private async parseLine(line: string): Promise<void> {
+        const matches = line.match(this.executedInstructionAddressPattern);
+
+        if (!matches) {
+            return;
+        }
+
+        const instructionAddress = parseHexOrDecInt(matches[1]);
+        await this.initialiseCounters(instructionAddress);
+
+        const result = await this.addrResolver.resolve(hexFormat(instructionAddress));
+        this.executedInstructionsCounters[result.filename][result.line] += 1;
+    }
+
+    /**
+     * Parses stdout.
+     *
+     * @param data Data emitted by stdout.
+     */
+    public async onStdout(data: string): Promise<void> {
+        await Promise.all(
+            data
+                .trim()
+                .split('\n')
+                .map((line) => this.parseLine(line))
+        );
+    }
+
+    /**
+     * Returns the executed instruction counts.
+     *
+     * @param filename Name of the file to retrieve the line counts.
+     */
+    public getExecutedInstructionCounts(filename: string): Record<number, number> {
+        return this.executedInstructionsCounters[filename];
+    }
+}

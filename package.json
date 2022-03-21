@@ -481,6 +481,11 @@
             },
             {
                 "category": "Cortex-Debug",
+                "command": "cortex-debug.performance.toggleHeatmap",
+                "title": "Toggle Heatmap"
+            },
+            {
+                "category": "Cortex-Debug",
                 "command": "cortex-debug.examineMemory",
                 "title": "View Memory"
             },
@@ -2669,6 +2674,10 @@
                     "when": "false"
                 },
                 {
+                    "command": "cortex-debug.performance.toggleHeatmap",
+                    "when": "debugType == cortex-debug"
+                },
+                {
                     "command": "cortex-debug.peripherals.pin",
                     "when": "false"
                 },
@@ -2814,7 +2823,7 @@
                 {
                     "command": "cortex-debug.rtos.refresh",
                     "when": "view == cortex-debug.rtos",
-                    "group": "navigation@99"                    
+                    "group": "navigation@99"
                 },
                 {
                     "command": "cortex-debug.peripherals.forceRefresh",
@@ -2850,15 +2859,15 @@
             ]
         },
         "views": {
-			"cortex-debug": [
-				{
+            "cortex-debug": [
+                {
                     "id": "cortex-debug.rtos",
-					"type": "webview",
-					"name": "RTOS",
+                    "type": "webview",
+                    "name": "RTOS",
                     "when": "false",
                     "icon": "images/hex-on-dark.svg"
-				}
-			],
+                }
+            ],
             "debug": [
                 {
                     "id": "cortex-debug.peripherals",
@@ -2881,6 +2890,7 @@
     "dependencies": {
         "@vscode/extension-telemetry": "^0.4.7",
         "@vscode/webview-ui-toolkit": "^0.9.2",
+        "addr2line": "^0.0.3",
         "binary-parser": "^1.7.0",
         "bindings": "^1.5.0",
         "command-exists": "^1.2.9",

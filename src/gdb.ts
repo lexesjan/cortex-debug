@@ -37,6 +37,7 @@ import { SymbolTable } from './backend/symbols';
 import { SymbolInformation, SymbolScope } from './symbols';
 import { TcpPortScanner } from './tcpportscanner';
 import { Gem5ServerController } from './gem5';
+import { HeatmapInfo } from './backend/heatmap/heatmap_info';
 
 const SERVER_TYPE_MAP = {
     jlink: JLinkServerController,
@@ -125,6 +126,7 @@ export class GDBDebugSession extends DebugSession {
     protected forceDisassembly: boolean = false;
     protected activeEditorPath: string = null;
     protected disassember: GdbDisassembler;
+    private heatmapInfo: HeatmapInfo;
     // currentThreadId is the currently selected thread or where execution has stopped. It not very
     // meaningful since the current thread id in gdb can change in many ways (when you use a --thread
     // option on certain commands) 
@@ -399,6 +401,8 @@ export class GDBDebugSession extends DebugSession {
                 this.handleMsg('log', `    Please check TERMINAL tab (gdb-server) for output from ${executable}` + '\n');
             }
 
+            this.heatmapInfo = new HeatmapInfo(this.args.executable);
+
             const consolePort = (this.args as any).gdbServerConsolePort;
             const gdbPort = this.ports[createPortName(this.args.targetProcessor)];
             let initMatch = null;
@@ -431,6 +435,7 @@ export class GDBDebugSession extends DebugSession {
             this.server.on('launcherror', (err) => {
                 this.launchErrorResponse(response, 103, `Failed to launch ${this.serverController.name} GDB Server: ${err.toString()}`);
             });
+            this.server.on('stdout', (data) => this.heatmapInfo.onStdout(data))
 
             let timeout = setTimeout(() => {
                 this.server.exit();
@@ -901,6 +906,10 @@ export class GDBDebugSession extends DebugSession {
             case 'notified-children-to-terminate':  // We never get this request
                 this.serverConsoleLog(`Got request ${command}`);
                 this.emit('children-terminating');
+                this.sendResponse(response);
+                break;
+            case 'read-line-counts':
+                response.body = this.heatmapInfo.getExecutedInstructionCounts(args['filename']);
                 this.sendResponse(response);
                 break;
             default:
