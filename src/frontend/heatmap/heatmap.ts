@@ -36,7 +36,6 @@ export class Heatmap {
 
         const filename = path.basename(window.activeTextEditor.document.fileName);
         const lineCounts = (await session.customRequest('read-line-counts', { filename })) as Record<number, number>;
-        console.log({ lineCounts });
         if (!lineCounts) {
             window.showErrorMessage('Failed to retrieve executed instruction counts.');
             return;
@@ -48,7 +47,6 @@ export class Heatmap {
         lineCountPairs.forEach(([line, count]) => {
             const hitPercentage = count / totalInstructionCount;
             const [h, s, l] = Heatmap.calculateHeatMapColourForValue(hitPercentage);
-            console.log({ hitPercentage });
 
             const decorationType = window.createTextEditorDecorationType({
                 gutterIconPath: Uri.parse(

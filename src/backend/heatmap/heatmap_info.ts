@@ -5,6 +5,7 @@ import { hexFormat } from '../../frontend/utils';
 export class HeatmapInfo {
     private addrResolver: any;
     private executedInstructionsCounters: Record<string, Record<number, number>>;
+    private addressCounters: Record<number, number>;
     private isInitialised = false;
 
     private executedInstructionAddressPattern = /Instruction executed: ((0[xX])?[a-fA-F0-9]+)/;
@@ -17,6 +18,7 @@ export class HeatmapInfo {
             demangle: false,
         });
         this.executedInstructionsCounters = {};
+        this.addressCounters = {};
         this.isInitialised = false;
     }
 
@@ -67,7 +69,7 @@ export class HeatmapInfo {
     /**
      * Parses a stdout line and increments the counters.
      */
-    private async parseLine(line: string): Promise<void> {
+    private parseLine(line: string): void {
         const matches = line.match(this.executedInstructionAddressPattern);
 
         if (!matches) {
@@ -75,10 +77,8 @@ export class HeatmapInfo {
         }
 
         const instructionAddress = parseHexOrDecInt(matches[1]);
-        await this.initialiseCounters(instructionAddress);
-
-        const result = await this.addrResolver.resolve(hexFormat(instructionAddress));
-        this.executedInstructionsCounters[result.filename][result.line] += 1;
+        const addressCount = this.addressCounters[instructionAddress] || 0;
+        this.addressCounters[instructionAddress] = addressCount + 1;
     }
 
     /**
@@ -100,7 +100,19 @@ export class HeatmapInfo {
      *
      * @param filename Name of the file to retrieve the line counts.
      */
-    public getExecutedInstructionCounts(filename: string): Record<number, number> {
+    public async getExecutedInstructionCounts(filename: string): Promise<Record<number, number>> {
+        const addressCountPairs = Object.entries(this.addressCounters);
+        await this.initialiseCounters(parseInt(addressCountPairs[0][0]) ?? 0);
+
+        await Promise.all(
+            addressCountPairs.map(async ([addressString, count]) => {
+                const address = parseInt(addressString);
+                const result = await this.addrResolver.resolve(hexFormat(address));
+                this.executedInstructionsCounters[result.filename][result.line] += count;
+            })
+        );
+
+        this.addressCounters = {};
         return this.executedInstructionsCounters[filename];
     }
 }

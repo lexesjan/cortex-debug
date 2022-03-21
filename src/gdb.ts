@@ -909,8 +909,10 @@ export class GDBDebugSession extends DebugSession {
                 this.sendResponse(response);
                 break;
             case 'read-line-counts':
-                response.body = this.heatmapInfo.getExecutedInstructionCounts(args['filename']);
-                this.sendResponse(response);
+                (async () => {
+                    response.body = await this.heatmapInfo.getExecutedInstructionCounts(args['filename']);
+                    this.sendResponse(response);
+                })();
                 break;
             default:
                 response.body = { error: 'Invalid command.' };
