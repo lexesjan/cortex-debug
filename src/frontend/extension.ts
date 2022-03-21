@@ -538,7 +538,6 @@ export class CortexDebugExtension {
     }
 
     private async performanceToggleHeatmap(): Promise<void> {
-        vscode.window.showErrorMessage('toggling');
         this.heatmap.isShown = !this.heatmap.isShown;
 
         if (this.heatmap.isShown) {
