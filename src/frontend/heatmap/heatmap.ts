@@ -19,7 +19,9 @@ export class Heatmap {
      * @param value Value ranging from 0 to 1.
      */
     private static calculateHeatMapColourForValue(value: number): HSL {
-        const h = (1.0 - value) * 240;
+        // Ensure that the colour is red at 0.5 or above.
+        const scaledValue = Math.min(value * 2, 1);
+        const h = (1.0 - scaledValue) * 240;
         return [h, 100, 50];
     }
 
