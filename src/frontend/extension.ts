@@ -61,7 +61,7 @@ export class CortexDebugExtension {
         this.memoryProvider = new MemoryContentProvider();
         this.performanceProvider = new PerformanceTreeProvider();
 
-        // const rtosTracker = new RTOSTracker(context); // You must also enable it in package.json "views"/"cortex-debug"/"when"
+        const rtosTracker = new RTOSTracker(context);
 
         this.heatmap = new Heatmap();
 
