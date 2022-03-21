@@ -19,64 +19,65 @@ const IC_ADC = 0xe000300c;
 
 // Subtract instructions.
 const IC_SUB = 0xe0003010;
-const IC_SBC = 0xe0003014;
-const IC_RSB = 0xe0003018;
+const IC_SUBS = 0xe0003014;
+const IC_SBC = 0xe0003018;
+const IC_RSB = 0xe000301c;
 
 // Multiply instructions.
-const IC_MUL = 0xe000301c;
+const IC_MUL = 0xe0003020;
 
 // Divide instructions.
-const IC_SDIV = 0xe0003020;
-const IC_UDIV = 0xe0003024;
+const IC_SDIV = 0xe0003024;
+const IC_UDIV = 0xe0003028;
 
 // Compare instructions.
-const IC_CMP = 0xe0003028;
-const IC_CMN = 0xe000302c;
+const IC_CMP = 0xe000302c;
+const IC_CMN = 0xe0003030;
 
 // Logical instructions.
-const IC_AND = 0xe0003030;
-const IC_EOR = 0xe0003034;
-const IC_ORR = 0xe0003038;
-const IC_ORN = 0xe000303c;
-const IC_BIC = 0xe0003040;
-const IC_MVN = 0xe0003044;
-const IC_TST = 0xe0003048;
-const IC_TEQ = 0xe000304c;
+const IC_AND = 0xe0003034;
+const IC_EOR = 0xe0003038;
+const IC_ORR = 0xe000303c;
+const IC_ORN = 0xe0003040;
+const IC_BIC = 0xe0003044;
+const IC_MVN = 0xe0003048;
+const IC_TST = 0xe000304c;
+const IC_TEQ = 0xe0003050;
 
 // Shift instructions.
-const IC_LSL = 0xe0003050;
-const IC_LSR = 0xe0003054;
-const IC_ASR = 0xe0003058;
+const IC_LSL = 0xe0003054;
+const IC_LSR = 0xe0003058;
+const IC_ASR = 0xe000305c;
 
 // Rotate instructions.
-const IC_ROR = 0xe000305c;
-const IC_RRX = 0xe0003060;
+const IC_ROR = 0xe0003060;
+const IC_RRX = 0xe0003064;
 
 // Load instructions.
-const IC_LDR = 0xe0003064;
-const IC_LDRH = 0xe0003068;
-const IC_LDRB = 0xe000306c;
-const IC_LDRSH = 0xe0003070;
-const IC_LDRSB = 0xe0003074;
-const IC_LDRD = 0xe0003078;
+const IC_LDR = 0xe0003068;
+const IC_LDRH = 0xe000306c;
+const IC_LDRB = 0xe0003070;
+const IC_LDRSH = 0xe0003074;
+const IC_LDRSB = 0xe0003078;
+const IC_LDRD = 0xe000307c;
 // gem5 LDM variants (e.g. LDMFD) are given the same name.
-const IC_LDM = 0xe000307c;
+const IC_LDM = 0xe0003080;
 
 // Store instructions.
-const IC_STR = 0xe0003080;
-const IC_STRH = 0xe0003084;
-const IC_STRB = 0xe0003088;
-const IC_STRSH = 0xe000308c;
-const IC_STRSB = 0xe0003090;
-const IC_STRD = 0xe0003094;
+const IC_STR = 0xe0003084;
+const IC_STRH = 0xe0003088;
+const IC_STRB = 0xe000308c;
+const IC_STRSH = 0xe0003090;
+const IC_STRSB = 0xe0003094;
+const IC_STRD = 0xe0003098;
 // gem5 STM variants (e.g. STMFD) are given the same name.
-const IC_STM = 0xe0003098;
+const IC_STM = 0xe000309c;
 
 // Branch instructions.
-const IC_BL = 0xe000309c;
-const IC_BX = 0xe00030a0;
+const IC_BL = 0xe00030a0;
+const IC_BX = 0xe00030a4;
 // gem5 conditional instructions are given the same name.
-const IC_B = 0xe00030a4;
+const IC_B = 0xe00030a8;
 
 export class PerformanceInstructionCountersNode extends PerformanceCountersNode {
     private previousTotalCount: number;
@@ -90,6 +91,7 @@ export class PerformanceInstructionCountersNode extends PerformanceCountersNode 
             ]),
             new PerformanceInstructionGroupNode('Subtract', [
                 new PerformanceCounterNode(session, 'SUB', IC_SUB),
+                new PerformanceCounterNode(session, 'SUBS', IC_SUBS),
                 new PerformanceCounterNode(session, 'SBC', IC_SBC),
                 new PerformanceCounterNode(session, 'RSB', IC_RSB),
             ]),

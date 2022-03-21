@@ -7,7 +7,7 @@ import {
     DebugSession,
     TreeItemCollapsibleState,
 } from 'vscode';
-import { BaseNode, PerformanceBaseNode } from './nodes/basenode';
+import { PerformanceBaseNode } from './nodes/basenode';
 import { MessageNode } from './nodes/messagenode';
 import { PerformanceCycleCountersNode } from './nodes/performancecyclecountersnode';
 import { PerformanceInstructionCountersNode } from './nodes/performanceinstructioncountersnode';
