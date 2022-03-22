@@ -2,24 +2,42 @@ import * as vscode from 'vscode';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import * as RTOSCommon from './rtos-common';
 import { hexFormat } from '../utils';
-import { HrTimer } from '../../common';
+import { HrTimer, toStringDecHexOctBin } from '../../common';
 
-interface FreeRTOSThreadInfo {
-    'ID'?: string;
-    'Address': string;
-    'Task Name': string;
-    'Status': string;
-    'Pri': string;
-    'Stack Beg': string;
-    'Stack Top': string;
-    'Stack Used': string;
-    'Stack End'?: string;
-    'Stack Size'?: string;
-    'Stack Peak'?: string;
-    'Stack Free'?: string;
-    'Runtime'?: string;
-    stackInfo: RTOSCommon.RTOSStackInfo;
+// We will have two rows of headers for FreeRTOS and the table below describes
+// the columns headers for the two rows and the width of each column as a fraction
+// of the overall space.
+enum DisplayFields {
+    ID,
+    Address,
+    TaskName,
+    Status,
+    Priority,
+    StackStart,
+    StackTop,
+    StackEnd,
+    StackSize,
+    StackUsed,
+    StackFree,
+    StackPeak,
+    Runtime
 }
+
+const FreeRTOSItems: {[key: string]: RTOSCommon.DisplayItem} = {};
+FreeRTOSItems[DisplayFields[DisplayFields.ID]]         = {width: 1,   headerRow1: '',        headerRow2: 'ID'};
+FreeRTOSItems[DisplayFields[DisplayFields.Address]]    = {width: 3,   headerRow1: 'Thread',  headerRow2: 'Address'};
+FreeRTOSItems[DisplayFields[DisplayFields.TaskName]]   = {width: 4,   headerRow1: '',        headerRow2: 'Task Name'};
+FreeRTOSItems[DisplayFields[DisplayFields.Status]]     = {width: 3,   headerRow1: '',        headerRow2: 'Status'};
+FreeRTOSItems[DisplayFields[DisplayFields.Priority]]   = {width: 1.5, headerRow1: 'Prio',    headerRow2: 'rity'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackStart]] = {width: 3,   headerRow1: 'Stack',   headerRow2: 'Start'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackTop]]   = {width: 3,   headerRow1: 'Stack',   headerRow2: 'Top'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackEnd]]   = {width: 3,   headerRow1: 'Stack',   headerRow2: 'End'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackSize]]  = {width: 2,   headerRow1: 'Stack',   headerRow2: 'Size'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackUsed]]  = {width: 2,   headerRow1: 'Stack',   headerRow2: 'Used'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackFree]]  = {width: 2,   headerRow1: 'Stack',   headerRow2: 'Free'};
+FreeRTOSItems[DisplayFields[DisplayFields.StackPeak]]  = {width: 2,   headerRow1: 'Stack',   headerRow2: 'Peak'};
+FreeRTOSItems[DisplayFields[DisplayFields.Runtime]]    = {width: 2,   headerRow1: '',        headerRow2: 'Runtime'};
+const DisplayFieldNames: string[] = Object.keys(FreeRTOSItems);
 
 function isNullOrUndefined(x) {
     return (x === undefined) || (x === null);
@@ -44,10 +62,13 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
 
     private stale: boolean;
     private curThreadAddr: number;
-    private foundThreads: FreeRTOSThreadInfo[] = [];
-    private finalThreads: FreeRTOSThreadInfo[] = [];
+    private foundThreads: RTOSCommon.FreeRTOSThreadInfo[] = [];
+    private finalThreads: RTOSCommon.FreeRTOSThreadInfo[] = [];
     private timeInfo: string;
     private readonly maxThreads = 1024;
+
+    // Need to do a TON of testing for stack growing the other direction
+    private stackIncrements = -1;
 
     constructor(public session: vscode.DebugSession) {
         super(session, 'FreeRTOS');
@@ -61,15 +82,15 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
                 // and the caller may try again until we know that it definitely passed or failed. Note that while we
                 // re-try everything, we do remember what already had succeeded and don't waste time trying again. That
                 // is how this.getVarIfEmpty() works
-                this.uxCurrentNumberOfTasks = await this.getVarIfEmpty(this.uxCurrentNumberOfTasks, useFrameId, 'uxCurrentNumberOfTasks');
-                this.pxReadyTasksLists = await this.getVarIfEmpty(this.pxReadyTasksLists, useFrameId, 'pxReadyTasksLists');
-                this.xDelayedTaskList1 = await this.getVarIfEmpty(this.xDelayedTaskList1, useFrameId, 'xDelayedTaskList1');
-                this.xDelayedTaskList2 = await this.getVarIfEmpty(this.xDelayedTaskList2, useFrameId, 'xDelayedTaskList2');
-                this.xPendingReadyList = await this.getVarIfEmpty(this.xPendingReadyList, useFrameId, 'xPendingReadyList');
-                this.pxCurrentTCB = await this.getVarIfEmpty(this.pxCurrentTCB, useFrameId, 'pxCurrentTCB');
-                this.xSuspendedTaskList = await this.getVarIfEmpty(this.xSuspendedTaskList, useFrameId, 'xSuspendedTaskList', true);
-                this.xTasksWaitingTermination = await this.getVarIfEmpty(this.xTasksWaitingTermination, useFrameId, 'xTasksWaitingTermination', true);
-                this.ulTotalRunTime = await this.getVarIfEmpty(this.ulTotalRunTime, useFrameId, 'ulTotalRunTime', true);
+                this.uxCurrentNumberOfTasks = await this.getVarIfEmpty(this.uxCurrentNumberOfTasks, useFrameId, 'uxCurrentNumberOfTasks', false);
+                this.pxReadyTasksLists = await this.getVarIfEmpty(this.pxReadyTasksLists, useFrameId, 'pxReadyTasksLists', true);
+                this.xDelayedTaskList1 = await this.getVarIfEmpty(this.xDelayedTaskList1, useFrameId, 'xDelayedTaskList1', true);
+                this.xDelayedTaskList2 = await this.getVarIfEmpty(this.xDelayedTaskList2, useFrameId, 'xDelayedTaskList2', true);
+                this.xPendingReadyList = await this.getVarIfEmpty(this.xPendingReadyList, useFrameId, 'xPendingReadyList', true);
+                this.pxCurrentTCB = await this.getVarIfEmpty(this.pxCurrentTCB, useFrameId, 'pxCurrentTCB', false);
+                this.xSuspendedTaskList = await this.getVarIfEmpty(this.xSuspendedTaskList, useFrameId, 'xSuspendedTaskList', true, true);
+                this.xTasksWaitingTermination = await this.getVarIfEmpty(this.xTasksWaitingTermination, useFrameId, 'xTasksWaitingTermination', true, true);
+                this.ulTotalRunTime = await this.getVarIfEmpty(this.ulTotalRunTime, useFrameId, 'ulTotalRunTime', false, true);
                 this.status = 'initialized';
             }
             return this;
@@ -102,7 +123,7 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
                             const vars = await this.pxReadyTasksLists.getVarChildren(frameId);
                             const tmpArray = [];
                             for (const v of vars) {
-                                tmpArray.push(await this.getVarIfEmpty(undefined, frameId, v.evaluateName));
+                                tmpArray.push(await this.getVarIfEmpty(undefined, frameId, v.evaluateName, true));
                             }
                             this.pxReadyTasksListsItems = tmpArray;
                         }
@@ -122,10 +143,10 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
                         await this.getThreadInfo(this.xPendingReadyList, 'BLOCKED', frameId);
                         await this.getThreadInfo(this.xSuspendedTaskList, 'SUSPENDED', frameId);
                         await this.getThreadInfo(this.xTasksWaitingTermination, 'TERMINATED', frameId);
-                        if (this.foundThreads[0]['ID']) {
-                            this.foundThreads.sort((a, b) => parseInt(a['ID']) - parseInt(b['ID']));
+                        if (this.foundThreads[0]['ID'] !== '??') {
+                            this.foundThreads.sort((a, b) => parseInt(a.display['ID']) - parseInt(b.display['ID']));
                         } else {
-                            this.foundThreads.sort((a, b) => parseInt(a['Address']) - parseInt(b['Address']));
+                            this.foundThreads.sort((a, b) => parseInt(a.display['Address']) - parseInt(b.display['Address']));
                         }
                         this.finalThreads = [...this.foundThreads];
                         // console.table(this.finalThreads);
@@ -176,36 +197,36 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
                         const thName = match ? match[1] : tmpThName;
                         const stackInfo = await this.getStackInfo(thInfo, 0xA5);
                         // This is the order we want stuff in
-                        const th: FreeRTOSThreadInfo = {
-                            'ID'            : thInfo['uxTCBNumber-val'],
-                            'Address'       : hexFormat(threadId),
-                            'Task Name'     : thName,
-                            'Status'        : (threadId === this.curThreadAddr) ? 'RUNNING' : state,
-                            'Pri'           : thInfo['uxPriority-val'],
-                            'Stack Beg'     : hexFormat(stackInfo.stackStart),
-                            'Stack Top'     : hexFormat(stackInfo.stackTopCurrent),
-                            'Stack Used'    : stackInfo.stackCurUsed.toString(),
-                            'stackInfo'     : stackInfo
+                        const display: {[key: string]: string} = {};
+                        const mySetter = (x: DisplayFields, v: string) => {
+                            display[DisplayFieldNames[x]] = v;
                         };
-                        if (typeof th['ID'] !== 'string') {
-                            delete th['ID'];
-                        }
+                        const myGetter = (x: DisplayFields) => display[DisplayFieldNames[x]];
+                        mySetter(DisplayFields.ID, thInfo['uxTCBNumber-val'] || '??');
+                        mySetter(DisplayFields.Address, hexFormat(threadId));
+                        mySetter(DisplayFields.TaskName, thName);
+                        mySetter(DisplayFields.Status, (threadId === this.curThreadAddr) ? 'RUNNING' : state);
+                        mySetter(DisplayFields.StackStart, hexFormat(stackInfo.stackStart));
+                        mySetter(DisplayFields.StackTop, hexFormat(stackInfo.stackTop));
+                        mySetter(DisplayFields.StackEnd, stackInfo.stackEnd ? hexFormat(stackInfo.stackEnd) : '0x????????');
+
+                        mySetter(DisplayFields.Priority, thInfo['uxPriority-val']);
                         if (thInfo['uxBasePriority-val']) {
-                            th['Pri'] += `,${thInfo['uxBasePriority-val']}`;
+                            mySetter(DisplayFields.Priority,  myGetter(DisplayFields.Priority) + `,${thInfo['uxBasePriority-val']}`);
                         }
-                        if (stackInfo.stackSize) {
-                            th['Stack End']  = hexFormat(stackInfo.stackEnd);
-                            th['Stack Size'] = stackInfo.stackSize.toString();
-                            th['Stack Peak'] = stackInfo.stackPeakUsed ? stackInfo.stackPeakUsed.toString() : 'Read mem fail';
-                            th['Stack Free'] = stackInfo.stackFree.toString();
-                        } else {
-                            th['Stack End']  = '&lt;Unknown&gt;';
-                        }
+
+                        const func = (x) => x === undefined ? '???' : x.toString();
+                        mySetter(DisplayFields.StackSize, func(stackInfo.stackSize));
+                        mySetter(DisplayFields.StackUsed, func(stackInfo.stackUsed));
+                        mySetter(DisplayFields.StackFree, func(stackInfo.stackFree));
+                        mySetter(DisplayFields.StackPeak, func(stackInfo.stackPeak));
                         if (thInfo['ulRunTimeCounter-val'] && this.ulTotalRunTimeVal) {
                             const tmp = ((parseInt(thInfo['ulRunTimeCounter-val']) / this.ulTotalRunTimeVal) * 100).toFixed(2);
-                            th['Runtime'] = tmp.padStart(5, '0') + '%';
+                            mySetter(DisplayFields.Runtime, tmp.padStart(5, '0') + '%');
+                        } else {
+                            mySetter(DisplayFields.Runtime, '??.??%');
                         }
-                        this.foundThreads.push(th);
+                        this.foundThreads.push({display: display, stackInfo: stackInfo});
                         curRef = element['pxPrevious-ref'];
                     }
                     resolve();
@@ -225,52 +246,53 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
         const pxEndOfStack = thInfo['pxEndOfStack-val'];
         const stackInfo: RTOSCommon.RTOSStackInfo = {
             stackStart: parseInt(pxStack),
-            stackTopCurrent: parseInt(pxTopOfStack),
-            stackCurUsed: 0
+            stackTop: parseInt(pxTopOfStack)
         };
-        const stackUsedCur = stackInfo.stackStart - stackInfo.stackTopCurrent;
-        stackInfo.stackCurUsed = Math.abs(stackUsedCur);
+        const stackDelta = Math.abs(stackInfo.stackTop - stackInfo.stackStart);
+        if (this.stackIncrements < 0) {
+            stackInfo.stackFree = stackDelta;
+        } else {
+            stackInfo.stackUsed = stackDelta;
+        }
 
         if (pxEndOfStack) {
             stackInfo.stackEnd = parseInt(pxEndOfStack);
-            stackInfo.stackSize = stackInfo.stackStart - stackInfo.stackEnd;
-            const incr = stackInfo.stackSize < 0 ? 1 : -1;
-            stackInfo.stackSize = Math.abs(stackInfo.stackSize);
-            stackInfo.stackFree = stackInfo.stackSize - stackInfo.stackCurUsed;
+            stackInfo.stackSize = Math.abs(stackInfo.stackStart - stackInfo.stackEnd);
+            if (this.stackIncrements < 0) {
+                stackInfo.stackUsed = stackInfo.stackSize - stackDelta;
+            } else {
+                stackInfo.stackFree = stackInfo.stackSize - stackDelta;
+            }
             const memArg: DebugProtocol.ReadMemoryArguments = {
-                memoryReference: (incr > 0) ? hexFormat(stackInfo.stackStart, 8) : hexFormat(stackInfo.stackEnd, 8),
+                memoryReference: hexFormat(Math.min(stackInfo.stackStart, stackInfo.stackEnd)),
                 count: stackInfo.stackSize
             };
             try {
-                const stackData: DebugProtocol.ReadMemoryResponse = await this.session.customRequest('readMemory', memArg);
-                const buf = Buffer.from(stackData.body?.data, 'base64');
+                const stackData = await this.session.customRequest('readMemory', memArg);
+                const buf = Buffer.from(stackData.data, 'base64');
                 stackInfo.bytes = new Uint8Array(buf);
-                if (incr < 0) { stackInfo.bytes.reverse(); }
-                let top = stackInfo.bytes.length;
-                while (top > 0) {
-                    if (stackInfo.bytes[top - 1] !== waterMark) {
+                let start = this.stackIncrements < 0 ? 0 : stackInfo.bytes.length - 1;
+                const end = this.stackIncrements < 0 ? stackInfo.bytes.length : -1;
+                let peak = 0;
+                while (start !== end) {
+                    if (stackInfo.bytes[start] !== waterMark) {
                         break;
                     }
-                    top--;
+                    start -= this.stackIncrements;
+                    peak++;
                 }
-                stackInfo.stackPeakUsed = top;
+                stackInfo.stackPeak = stackInfo.stackSize - peak;
             }
             catch (e) {
                 console.log(e);
             }
-        } else {
-            const incr = stackUsedCur < 0 ? 1 : -1;
-            const memArg: DebugProtocol.ReadMemoryArguments = {
-                memoryReference: (incr > 0) ? hexFormat(stackInfo.stackStart, 8) : hexFormat(stackInfo.stackTopCurrent, 8),
-                count: stackInfo.stackCurUsed
-            };
-            const stackData: DebugProtocol.ReadMemoryResponse = await this.session.customRequest('readMemory', memArg);
         }
         return stackInfo;
     }
 
     public lastValidHtml: string = '';
     public getHTML(): string {
+        // WARNING: This stuff is super fragile. Once we know what we works, them we should refactor this
         let ret = '';
         if (this.status === 'none') {
             return '<p>RTOS not yet fully initialized. Will occur next time program pauses</p>\n';
@@ -292,62 +314,9 @@ export class RTOSFreeRTOS extends RTOSCommon.RTOSBase {
         } else if (this.finalThreads.length === 0) {
             return `<p>No ${this.name} threads detected, perhaps RTOS not yet initialized or tasks yet to be created!</p>\n`;
         }
-        
-        const keys = Object.keys(this.finalThreads[0]);
-        let fmt = '';
-        for (const k of keys) {
-            let tmp = 4;
-            if (k === 'ID') {
-                tmp = 1;
-            } else if (k === 'Task Name') {
-                tmp = 6;
-            } else if (k === 'Pri') {
-                tmp = 2;
-            } else if (k === 'Runtime') {
-                tmp = 2;
-            }
-            fmt += `${tmp}fr `;
-        }
 
-        let table = `<vscode-data-grid class="${this.name}-grid threads-grid" grid-template-columns="${fmt}">\n`;
-        let header = '';
-        for (const th of this.finalThreads) {
-            if (!header) {
-                let col = 1;
-                header = `  <vscode-data-grid-row row-type="header" class="${this.name}-header-row threads-header-row">\n`;
-                for (const key of keys) {
-                    const v = th[key];
-                    if (typeof v !== 'object') {
-                        header += `    <vscode-data-grid-cell class="${this.name}-header-cell threads-header-cell" cell-type="columnheader" grid-column="${col}">${key}</vscode-data-grid-cell>\n`;
-                        col++;
-                    }
-                }
-                header += '  </vscode-data-grid-row>\n';
-                table += header;
-            }
-
-            let col = 1;
-            table += `  <vscode-data-grid-row class="${this.name}-row threads-row">\n`;
-            for (const key of keys) {
-                const v = th[key];
-                if (typeof v !== 'object') {
-                    let txt = v;
-                    if (key === 'Stack Beg') {
-                        txt = `<vscode-link class="threads-link-${makeOneWord(key)}" href="#">${v}</vscode-link>`;
-                    }
-                    const cls = `class="${this.name}-cell threads-cell threads-cell-${makeOneWord(key)}"`;
-                    table += `    <vscode-data-grid-cell ${cls} grid-column="${col}">${txt}</vscode-data-grid-cell>\n`;
-                    col++;
-                }
-            }
-            table += '  </vscode-data-grid-row>\n';
-        }
-        ret += table;
-        ret += '</vscode-data-grid>\n';
-        if (this.timeInfo) {
-            ret += `<p>Data collected at ${this.timeInfo}</p>\n`;
-        }
-
+        ret += this.getHTMLCommon(DisplayFieldNames, FreeRTOSItems, this.finalThreads, this.timeInfo);
+        // console.log(ret);
         this.lastValidHtml = ret;
         return ret;
     }
