@@ -2559,7 +2559,7 @@
                             },
                             "ROM": {
                                 "type": "string",
-                                "description": "ROM used to run "
+                                "description": "Path of the ROM file to be simulated by gem5."
                             }
                         },
                         "required": [
